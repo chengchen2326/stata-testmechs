@@ -1,0 +1,8 @@
+v 0.0.1
+d TestMechs (MVP): Stata translation of Jon Roth & Soonwoo Kwon's TestMechs R package.
+d
+d Installation:
+d   net install testmechs, from("https://raw.githubusercontent.com/chengchen2326/stata-testmechs/main") replace
+d
+f testmechs_lb_fracaffected.ado
+f testmechs_lb_fracaffected.sthlp
