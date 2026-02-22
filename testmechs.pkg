@@ -4,5 +4,5 @@ d
 d Installation:
 d   net install testmechs, from("https://raw.githubusercontent.com/chengchen2326/stata-testmechs/main") replace
 d
-f testmechs_lb_fracaffected.ado
-f testmechs_lb_fracaffected.sthlp
+f src/testmechs_lb_fracaffected.ado
+f src/testmechs_lb_fracaffected.sthlp
