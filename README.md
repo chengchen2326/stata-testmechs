@@ -1,29 +1,15 @@
-# stata-testmechs
+# stata-testmechs (MVP)
 
-Stata package (MVP) translating key functionality from Jon Roth's TestMechs R package.
+This repository contains an **MVP Stata translation** of key functionality from Jon Roth & Soonwoo Kwon’s **TestMechs** R package (paper: *Testing Mechanisms*).
 
-## Status
-- MVP in progress: default-path implementation only (reduced feature set vs R).
-- Added `testmechs_lb_fracaffected` as an MVP translation of `lb_frac_affected.R` for the binary-mediator default path.
+## Status (MVP scope)
+- ✅ Implemented: `testmechs_lb_fracaffected` (MVP version of R `lb_frac_affected()`), **default path only**
+- ✅ Supported inputs:
+  - Positional varlist: **`d m y`** (all numeric)
+  - Options: `atgroup(#)` and `numybins(#)`
+- 🚫 Not yet implemented (will error in MVP):
+  - `regformula()`, `continuousy`
+  - `maxdefiersshare()>0`, `allowmindefiers`, `returnmindefiers`
+  - Additional inference/plotting functions (e.g., `test_sharp_null`)
 
-## Reference
-The original R source is stored in `r_reference/` for translation and validation.
-
-## Usage
-From Stata in repo root:
-
-```stata
-adopath ++ .
-* var order is: treatment mediator outcome
-
-testmechs_lb_fracaffected d m y
-testmechs_lb_fracaffected d m y, atgroup(1)
-testmechs_lb_fracaffected d m y, numybins(5)
-```
-
-## Testing
-Run the dedicated MVP test do-file from the repo root:
-
-```stata
-do tests/test_lb_fracaffected.do
-```
+The original R source is kept under `r_reference/` for translation and validation.
