@@ -24,3 +24,27 @@ This repo includes two Stata datasets converted from the TestMechs R package dat
 Notes:
 - These `.dta` files are provided for quick replication in Stata.
 - They are derived from the original R package data; see `r_reference/` for the upstream source.
+
+## Installation
+
+Install using `net install` from GitHub:
+
+```stata
+cap noi net uninstall testmechs
+net install testmechs, from("https://raw.githubusercontent.com/chengchen2326/stata-testmechs/main") replace
+```
+## Examples
+
+### Lower bound on fraction affected (default/recommended path)
+
+This replicates the README example from the TestMechs R package for the experimental sample.
+
+```stata
+use "mother_data.dta", clear
+
+* varlist order is: d m y
+testmechs_lb_fracaffected treat grandmother motherfinancial, numybins(5) atgroup(0)
+```
+Expected output (MVP):
+
+lower bound = 0.185891 (R README benchmark: 0.1858912)
