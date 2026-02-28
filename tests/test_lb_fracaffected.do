@@ -41,10 +41,10 @@ assert abs(pooled - 0.5) < 1e-8
 
 noi di as result "test_lb_fracaffected.do passed"
 
-* Benchmark from TestMechs R package default path with bounded defiers.
+* Benchmark from TestMechs R package default path with allow_min_defiers = TRUE.
 use data/mother_data.dta, clear
-testmechs_lb_fracaffected treat grandmother motherfinancial, numybins(5) atgroup(0) maxdefiersshare(.01)
+testmechs_lb_fracaffected treat relationship_husb motherfinancial, numybins(5)
 scalar lb_benchmark = r(lb)
-assert abs(lb_benchmark - 0.1716415) < 1e-6
+assert abs(lb_benchmark - 0.1002207) < 1e-6
 
-noi di as result "mother_data bounded-defiers benchmark passed"
+noi di as result "mother_data allow-min-defiers benchmark passed"
