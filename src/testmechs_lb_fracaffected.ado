@@ -231,9 +231,9 @@ program define testmechs_lb_fracaffected, rclass
     file write py "x2,val2,unb2=solve_min(A,b,obj)" _n
     file write py "if x2 is None: raise RuntimeError('fractional LP failed')" _n
     file write py "with open(outp,'w') as f:" _n
-    file write py "    f.write('lb %s\\n' % val2)" _n
-    file write py "    f.write('min_defier_share %s\\n' % min_def)" _n
-    file write py "    f.write('maxdefiersshare_used %s\\n' % maxdef)" _n
+    file write py "    f.write('lb %s\n' % val2)" _n
+    file write py "    f.write('min_defier_share %s\n' % min_def)" _n
+    file write py "    f.write('maxdefiersshare_used %s\n' % maxdef)" _n
     file close py
 
     quietly shell python3 `pysrc' `lpinput' `lpout'
