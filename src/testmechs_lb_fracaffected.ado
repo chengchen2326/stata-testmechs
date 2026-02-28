@@ -3,8 +3,7 @@ program define testmechs_lb_fracaffected, rclass
 
     // MVP translation of TestMechs::lb_frac_affected default path.
     // R args mapped to Stata positional varlist: d m y.
-    syntax varlist(min=3 max=3 numeric) [if] [in] ///
-	[, ATGroup(string) NUMYBins(string) MAXDefiersShare(string)]
+    syntax varlist(min=3 max=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string)]
 	
 	if ("`atgroup'" == "") local atgroup 0
 	if ("`numybins'" == "") local numybins 5
