@@ -4,14 +4,15 @@ program define testmechs_lb_fracaffected, rclass
     // MVP translation of TestMechs::lb_frac_affected default path.
     // R args mapped to Stata positional varlist: d m y.
     syntax varlist(min=3 max=3 numeric) [if] [in] ///
-	[, ATGroup(string) NUMYBins(string)]
+	[, ATGroup(string) NUMYBins(string) MAXDefiersShare(string)]
 	
 	if ("`atgroup'" == "") local atgroup 0
 	if ("`numybins'" == "") local numybins 5
+    if ("`maxdefiersshare'" == "") local maxdefiersshare 0
     * convert to numeric (still stored as locals, but validated)
 	local atgroup = real("`atgroup'")
 	local numybins = real("`numybins'")
-	local maxdefiersshare 0
+    local maxdefiersshare = real("`maxdefiersshare'")
 
     marksample touse
     gettoken d rest : varlist
@@ -26,8 +27,8 @@ program define testmechs_lb_fracaffected, rclass
         di as err "reg_formula path is not implemented in MVP"
         exit 198
     }
-    if `maxdefiersshare' != 0 {
-        di as err "max_defiers_share != 0 is not implemented in MVP"
+    if `maxdefiersshare' < 0 {
+        di as err "maxdefiersshare() must be nonnegative"
         exit 198
     }
     if "`allowmindefiers'" != "" {
@@ -118,14 +119,73 @@ program define testmechs_lb_fracaffected, rclass
         if `mv' == `m_hi' scalar maxdiff_hi = thisdiff
     }
 
-    // R LP (no defiers, binary M) simplified closed-form pieces.
-    // theta_NT = P(M=m_lo|D=1), theta_AT = P(M=m_hi|D=0), theta_C = P(M=m_hi|D=1)-theta_AT.
-    scalar theta_nt = p_m1_lo
-    scalar theta_at = p_m0_hi
-    scalar theta_c  = p_m1_hi - p_m0_hi
+    // Binary-M LP with bounded defier share (matches R default path constraints).
+    // Type shares as function of defier share d:
+    //   theta_nt(d) = p_m1_lo - d
+    //   theta_at(d) = p_m0_hi - d
+    //   theta_c(d)  = p_m1_hi - p_m0_hi + d
+    scalar theta_c0 = p_m1_hi - p_m0_hi
+    scalar d_min = max(0, p_m0_hi - p_m1_hi)
+    scalar d_data_max = min(p_m1_lo, p_m0_hi)
+    if d_min > d_data_max + 1e-10 {
+        di as err "binary mediator marginals are internally inconsistent"
+        exit 498
+    }
 
-    // Violation terms v_m correspond to theta_mm * TV_m in R constraints.
-    scalar v_lo = max(maxdiff_lo, 0)
+    scalar min_defier_share = d_min
+    scalar maxdef_eff = `maxdefiersshare'
+    if maxdef_eff < d_min {
+        scalar maxdef_eff = d_min + 1e-6
+        di as txt "note: maxdefiersshare() below data-feasible minimum; using " %9.6f maxdef_eff
+    }
+    scalar d_max = min(d_data_max, maxdef_eff)
+
+    if (`atgroup' != `m_lo') & (`atgroup' != `m_hi') {
+        di as err "at_group must equal one of mediator levels: `m_lo' or `m_hi'"
+        exit 198
+    }
+
+    scalar best_lb = .
+    scalar best_d = .
+
+    // Candidate d values: endpoints + kinks from positive-part terms.
+    local d_candidates `=d_min' `=d_max' `=maxdiff_lo' `=maxdiff_hi-theta_c0'
+    foreach dc of local d_candidates {
+        scalar d_try = `dc'
+        if d_try < d_min - 1e-10 continue
+        if d_try > d_max + 1e-10 continue
+
+        scalar theta_nt_try = p_m1_lo - d_try
+        scalar theta_at_try = p_m0_hi - d_try
+        scalar theta_c_try = theta_c0 + d_try
+
+        scalar v_lo_try = max(maxdiff_lo - d_try, 0)
+        scalar v_hi_try = max(maxdiff_hi - theta_c_try, 0)
+
+        scalar lb_try = .
+        if `atgroup' == `m_lo' {
+            if theta_nt_try > 0 scalar lb_try = v_lo_try / theta_nt_try
+        }
+        else if `atgroup' == `m_hi' {
+            if theta_at_try > 0 scalar lb_try = v_hi_try / theta_at_try
+        }
+        else {
+            scalar denom_try = theta_nt_try + theta_at_try
+            if denom_try > 0 scalar lb_try = (v_lo_try + v_hi_try) / denom_try
+        }
+
+        if missing(best_lb) | (!missing(lb_try) & lb_try < best_lb) {
+            scalar best_lb = lb_try
+            scalar best_d = d_try
+        }
+    }
+
+    // Evaluate all reported quantities at the optimizing defier share.
+    scalar theta_nt = p_m1_lo - best_d
+    scalar theta_at = p_m0_hi - best_d
+    scalar theta_c  = theta_c0 + best_d
+
+    scalar v_lo = max(maxdiff_lo - best_d, 0)
     scalar v_hi = max(maxdiff_hi - theta_c, 0)
 
     scalar lb_lo = .
@@ -133,19 +193,7 @@ program define testmechs_lb_fracaffected, rclass
     if theta_nt > 0 scalar lb_lo = v_lo / theta_nt
     if theta_at > 0 scalar lb_hi = v_hi / theta_at
 
-    scalar lb = .
-    if "`atgroup'" != "" {
-        if (`atgroup' == `m_lo') scalar lb = lb_lo
-        else if (`atgroup' == `m_hi') scalar lb = lb_hi
-        else {
-            di as err "at_group must equal one of mediator levels: `m_lo' or `m_hi'"
-            exit 198
-        }
-    }
-    else {
-        scalar denom = theta_at + theta_nt
-        if denom > 0 scalar lb = (v_lo + v_hi) / denom
-    }
+    scalar lb = best_lb
 
     return scalar lb = lb
     return scalar lb_group_lo = lb_lo
@@ -153,6 +201,9 @@ program define testmechs_lb_fracaffected, rclass
     return scalar theta_nt = theta_nt
     return scalar theta_at = theta_at
     return scalar theta_c = theta_c
+    return scalar defier_share = best_d
+    return scalar min_defier_share = min_defier_share
+    return scalar maxdefiersshare_used = maxdef_eff
     return scalar max_p_diff_lo = maxdiff_lo
     return scalar max_p_diff_hi = maxdiff_hi
     return scalar m_lo = `m_lo'

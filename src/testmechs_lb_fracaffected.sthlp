@@ -8,7 +8,7 @@
 {title:Syntax}
 
 {p 8 12}
-{cmd:testmechs_lb_fracaffected} {it:d m y} {ifin} [{it:weight}] [{cmd:,} {opt atgroup(#)} {opt numybins(#)}]
+{cmd:testmechs_lb_fracaffected} {it:d m y} {ifin} [{it:weight}] [{cmd:,} {opt atgroup(#)} {opt numybins(#)} {opt maxdefiersshare(#)}]
 
 {title:Description}
 
@@ -23,7 +23,7 @@ This command currently supports:
 {break}
 - discrete outcome {it:y} (or discretized via {opt numybins()})
 {break}
-- no defiers ({cmd:max_defiers_share = 0} only)
+- optional bounded defiers via {opt maxdefiersshare(#)}
 
 {pstd}
 Unsupported R options/paths are intentionally not implemented in MVP and return a clear error.
@@ -35,6 +35,12 @@ Unsupported R options/paths are intentionally not implemented in MVP and return 
 
 {phang}
 {opt numybins(#)} discretizes {it:y} into # quantile bins before computation.
+
+{phang}
+{opt maxdefiersshare(#)} sets an upper bound on the share of defiers. Default is 0.
+If the value is below the data-feasible minimum implied by mediator marginals,
+the command automatically uses that minimum (plus a tiny tolerance), matching the
+R package's default behavior with {cmd:allow_min_defiers = TRUE}.
 
 {title:Returned results}
 
@@ -48,6 +54,9 @@ Scalars in {cmd:r()}:
 {synopt:{cmd:r(theta_nt)}}share of never-takers (binary-M mapping){p_end}
 {synopt:{cmd:r(theta_at)}}share of always-takers (binary-M mapping){p_end}
 {synopt:{cmd:r(theta_c)}}share of compliers (binary-M mapping){p_end}
+{synopt:{cmd:r(defier_share)}}defier share at the optimizing LP solution{p_end}
+{synopt:{cmd:r(min_defier_share)}}minimum data-feasible defier share{p_end}
+{synopt:{cmd:r(maxdefiersshare_used)}}effective defier cap used by the solver{p_end}
 {synopt:{cmd:r(max_p_diff_lo)}}max partial-density difference for low mediator level{p_end}
 {synopt:{cmd:r(max_p_diff_hi)}}max partial-density difference for high mediator level{p_end}
 {synopt:{cmd:r(m_lo)}}numeric value of low mediator level{p_end}
