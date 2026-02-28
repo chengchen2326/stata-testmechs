@@ -1,57 +1,29 @@
 program define testmechs_lb_fracaffected, rclass
     version 16.0
 
-    // MVP translation of TestMechs::lb_frac_affected default path.
-    // R args mapped to Stata positional varlist: d m y.
-    syntax varlist(min=3 max=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string)]
-	
-	if ("`atgroup'" == "") local atgroup 0
-	if ("`numybins'" == "") local numybins 5
+    syntax varlist(min=3 max=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string) allowmindefiers]
+
+    if ("`numybins'" == "") local numybins 5
     if ("`maxdefiersshare'" == "") local maxdefiersshare 0
-    * convert to numeric (still stored as locals, but validated)
-	local atgroup = real("`atgroup'")
-	local numybins = real("`numybins'")
+    local numybins = real("`numybins'")
     local maxdefiersshare = real("`maxdefiersshare'")
 
     marksample touse
     gettoken d rest : varlist
     gettoken m y : rest
 
-    // MVP scope guardrails: implement only default/recommended R path.
-    if "`continuousy'" != "" {
-        di as err "continuous_Y=TRUE path is not implemented in MVP"
-        exit 198
-    }
-    if "`regformula'" != "" {
-        di as err "reg_formula path is not implemented in MVP"
-        exit 198
-    }
     if `maxdefiersshare' < 0 {
         di as err "maxdefiersshare() must be nonnegative"
-        exit 198
-    }
-    if "`allowmindefiers'" != "" {
-        di as err "allow_min_defiers option is not implemented in MVP"
-        exit 198
-    }
-    if "`returnmindefiers'" != "" {
-        di as err "return_min_defiers option is not implemented in MVP"
         exit 198
     }
 
     tempvar wt touse2 ywork
     quietly gen double `wt' = 1 if `touse'
-    if "`weight'" != "" {
-        quietly replace `wt' = `exp' if `touse'
-    }
-
-    // Match remove_missing_from_df behavior for core variables.
     quietly gen byte `touse2' = `touse' & !missing(`d', `m', `y', `wt')
 
-    // Enforce binary treatment as in the main use-case/tests.
     quietly count if `touse2' & !inlist(`d', 0, 1)
     if r(N) > 0 {
-        di as err "treatment variable must be coded 0/1 in MVP"
+        di as err "treatment variable must be coded 0/1"
         exit 198
     }
 
@@ -64,150 +36,233 @@ program define testmechs_lb_fracaffected, rclass
         exit 2000
     }
 
-    // Optional discretization of Y (R: num_Ybins).
-    if `numybins' > 0 {
-        quietly xtile `ywork' = `y' if `touse2', nq(`numybins')
-    }
-    else {
-        quietly gen double `ywork' = `y' if `touse2'
-    }
+    if `numybins' > 0 quietly xtile `ywork' = `y' if `touse2', nq(`numybins')
+    else quietly gen double `ywork' = `y' if `touse2'
 
-    // MVP currently supports a binary mediator only.
     quietly levelsof `m' if `touse2', local(mlevels)
     local K : word count `mlevels'
-    if `K' != 2 {
-        di as err "MVP currently supports binary mediator only; found `K' levels"
+    if `K' < 2 {
+        di as err "mediator must have at least 2 observed levels"
         exit 198
     }
 
-    local m_lo : word 1 of `mlevels'
-    local m_hi : word 2 of `mlevels'
-
-    // Weighted totals within treatment arms.
     quietly summarize `wt' if `touse2' & `d' == 1, meanonly
     scalar W1 = r(sum)
     quietly summarize `wt' if `touse2' & `d' == 0, meanonly
     scalar W0 = r(sum)
 
-    // R: p_m_1 and p_m_0.
-    quietly summarize `wt' if `touse2' & `d' == 1 & `m' == `m_lo', meanonly
-    scalar p_m1_lo = r(sum) / W1
-    quietly summarize `wt' if `touse2' & `d' == 1 & `m' == `m_hi', meanonly
-    scalar p_m1_hi = r(sum) / W1
+    tempname p1 p0 maxdiff
+    matrix `p1' = J(`K',1,0)
+    matrix `p0' = J(`K',1,0)
+    matrix `maxdiff' = J(`K',1,0)
 
-    quietly summarize `wt' if `touse2' & `d' == 0 & `m' == `m_lo', meanonly
-    scalar p_m0_lo = r(sum) / W0
-    quietly summarize `wt' if `touse2' & `d' == 0 & `m' == `m_hi', meanonly
-    scalar p_m0_hi = r(sum) / W0
+    local k = 0
+    foreach mv of local mlevels {
+        local ++k
+        quietly summarize `wt' if `touse2' & `d' == 1 & `m' == `mv', meanonly
+        matrix `p1'[`k',1] = r(sum) / W1
+        quietly summarize `wt' if `touse2' & `d' == 0 & `m' == `mv', meanonly
+        matrix `p0'[`k',1] = r(sum) / W0
 
-    // R: max_p_diffs[m] = sum_y max( p(y,m|d=1)-p(y,m|d=0), 0 ).
-    scalar maxdiff_lo = 0
-    scalar maxdiff_hi = 0
-
-    foreach mv in `m_lo' `m_hi' {
         quietly levelsof `ywork' if `touse2' & `m' == `mv', local(yvals)
         scalar thisdiff = 0
         foreach yv of local yvals {
             quietly summarize `wt' if `touse2' & `d' == 1 & `m' == `mv' & `ywork' == `yv', meanonly
-            scalar p1 = r(sum) / W1
+            scalar p1y = r(sum) / W1
             quietly summarize `wt' if `touse2' & `d' == 0 & `m' == `mv' & `ywork' == `yv', meanonly
-            scalar p0 = r(sum) / W0
-            scalar thisdiff = thisdiff + max(p1 - p0, 0)
+            scalar p0y = r(sum) / W0
+            scalar thisdiff = thisdiff + max(p1y - p0y, 0)
         }
-        if `mv' == `m_lo' scalar maxdiff_lo = thisdiff
-        if `mv' == `m_hi' scalar maxdiff_hi = thisdiff
+        matrix `maxdiff'[`k',1] = thisdiff
     }
 
-    // Binary-M LP with bounded defier share (matches R default path constraints).
-    // Type shares as function of defier share d:
-    //   theta_nt(d) = p_m1_lo - d
-    //   theta_at(d) = p_m0_hi - d
-    //   theta_c(d)  = p_m1_hi - p_m0_hi + d
-    scalar theta_c0 = p_m1_hi - p_m0_hi
-    scalar d_min = max(0, p_m0_hi - p_m1_hi)
-    scalar d_data_max = min(p_m1_lo, p_m0_hi)
-    if d_min > d_data_max + 1e-10 {
-        di as err "binary mediator marginals are internally inconsistent"
+    local atindex 0
+    if "`atgroup'" != "" {
+        local atgroup_num = real("`atgroup'")
+        local k = 0
+        foreach mv of local mlevels {
+            local ++k
+            if (`mv' == `atgroup_num') local atindex `k'
+        }
+        if `atindex' == 0 {
+            di as err "atgroup() must equal one observed mediator level"
+            exit 198
+        }
+    }
+
+    tempfile lpinput lpout pysrc
+    file open fh using `lpinput', write text replace
+    file write fh "K `K'" _n
+    file write fh "atindex `atindex'" _n
+    file write fh "maxdef `maxdefiersshare'" _n
+    forvalues i = 1/`K' {
+        local p1i = `p1'[`i',1]
+        local p0i = `p0'[`i',1]
+        local mdi = `maxdiff'[`i',1]
+        file write fh "row `i' `p1i' `p0i' `mdi'" _n
+    }
+    file close fh
+
+    file open py using `pysrc', write text replace
+    file write py "import sys" _n
+    file write py "EPS=1e-9" _n
+    file write py "INF=1e100" _n
+    file write py "class LPSolver:" _n
+    file write py "    def __init__(self,A,b,c):" _n
+    file write py "        self.m=len(b); self.n=len(c)" _n
+    file write py "        self.N=list(range(self.n))+[-1]" _n
+    file write py "        self.B=[self.n+i for i in range(self.m)]" _n
+    file write py "        self.D=[[0.0]*(self.n+2) for _ in range(self.m+2)]" _n
+    file write py "        for i in range(self.m):" _n
+    file write py "            for j in range(self.n): self.D[i][j]=A[i][j]" _n
+    file write py "            self.D[i][self.n]=-1.0" _n
+    file write py "            self.D[i][self.n+1]=b[i]" _n
+    file write py "        for j in range(self.n): self.D[self.m][j]=-c[j]" _n
+    file write py "        self.D[self.m+1][self.n]=1.0" _n
+    file write py "    def pivot(self,r,s):" _n
+    file write py "        D=self.D; m=self.m; n=self.n" _n
+    file write py "        inv=1.0/D[r][s]" _n
+    file write py "        for i in range(m+2):" _n
+    file write py "            if i==r: continue" _n
+    file write py "            for j in range(n+2):" _n
+    file write py "                if j==s: continue" _n
+    file write py "                D[i][j]-=D[r][j]*D[i][s]*inv" _n
+    file write py "        for j in range(n+2):" _n
+    file write py "            if j!=s: D[r][j]*=inv" _n
+    file write py "        for i in range(m+2):" _n
+    file write py "            if i!=r: D[i][s]*=-inv" _n
+    file write py "        D[r][s]=inv" _n
+    file write py "        self.B[r],self.N[s]=self.N[s],self.B[r]" _n
+    file write py "    def simplex(self,phase):" _n
+    file write py "        x=self.m+1 if phase==1 else self.m" _n
+    file write py "        while True:" _n
+    file write py "            s=-1" _n
+    file write py "            for j in range(self.n+1):" _n
+    file write py "                if phase==2 and self.N[j]==-1: continue" _n
+    file write py "                if s==-1 or self.D[x][j] < self.D[x][s]-EPS or (abs(self.D[x][j]-self.D[x][s])<=EPS and self.N[j]<self.N[s]): s=j" _n
+    file write py "            if self.D[x][s] >= -EPS: return True" _n
+    file write py "            r=-1" _n
+    file write py "            for i in range(self.m):" _n
+    file write py "                if self.D[i][s] <= EPS: continue" _n
+    file write py "                if r==-1: r=i" _n
+    file write py "                else:" _n
+    file write py "                    lhs=self.D[i][self.n+1]/self.D[i][s]" _n
+    file write py "                    rhs=self.D[r][self.n+1]/self.D[r][s]" _n
+    file write py "                    if lhs < rhs-EPS or (abs(lhs-rhs)<=EPS and self.B[i] < self.B[r]): r=i" _n
+    file write py "            if r==-1: return False" _n
+    file write py "            self.pivot(r,s)" _n
+    file write py "    def solve_max(self):" _n
+    file write py "        r=0" _n
+    file write py "        for i in range(1,self.m):" _n
+    file write py "            if self.D[i][self.n+1] < self.D[r][self.n+1]: r=i" _n
+    file write py "        if self.D[r][self.n+1] < -EPS:" _n
+    file write py "            self.pivot(r,self.n)" _n
+    file write py "            if (not self.simplex(1)) or self.D[self.m+1][self.n+1] < -EPS: return None,None,False" _n
+    file write py "            if abs(self.D[self.m+1][self.n+1]) > EPS: return None,None,False" _n
+    file write py "            rr=-1" _n
+    file write py "            for i in range(self.m):" _n
+    file write py "                if self.B[i]==-1: rr=i; break" _n
+    file write py "            if rr!=-1:" _n
+    file write py "                s=0" _n
+    file write py "                for j in range(1,self.n+1):" _n
+    file write py "                    if self.D[rr][j] < self.D[rr][s]-EPS or (abs(self.D[rr][j]-self.D[rr][s])<=EPS and self.N[j] < self.N[s]): s=j" _n
+    file write py "                self.pivot(rr,s)" _n
+    file write py "        if not self.simplex(2): return None,None,True" _n
+    file write py "        x=[0.0]*self.n" _n
+    file write py "        for i in range(self.m):" _n
+    file write py "            if self.B[i] < self.n: x[self.B[i]] = self.D[i][self.n+1]" _n
+    file write py "        return x,self.D[self.m][self.n+1],False" _n
+    file write py "def solve_min(A,b,c):" _n
+    file write py "    x,val,unb=LPSolver(A,b,[-v for v in c]).solve_max()" _n
+    file write py "    if x is None: return None,None,unb" _n
+    file write py "    return x,-val,unb" _n
+    file write py "inp,outp=sys.argv[1],sys.argv[2]" _n
+    file write py "lines=[x.strip().split() for x in open(inp) if x.strip()]" _n
+    file write py "K=int(lines[0][1]); atindex=int(lines[1][1]); maxdef=float(lines[2][1])" _n
+    file write py "rows=lines[3:3+K]" _n
+    file write py "p1=[float(r[2]) for r in rows]; p0=[float(r[3]) for r in rows]; md=[float(r[4]) for r in rows]" _n
+    file write py "def idx(i,j): return i*K+j" _n
+    file write py "n=K*K" _n
+    file write py "A=[]; b=[]" _n
+    file write py "for j in range(K):" _n
+    file write py "    row=[0.0]*n" _n
+    file write py "    for i in range(K): row[idx(i,j)] = 1.0" _n
+    file write py "    A.append(row); b.append(p1[j]); A.append([-v for v in row]); b.append(-p1[j])" _n
+    file write py "for i in range(K):" _n
+    file write py "    row=[0.0]*n" _n
+    file write py "    for j in range(K): row[idx(i,j)] = 1.0" _n
+    file write py "    A.append(row); b.append(p0[i]); A.append([-v for v in row]); b.append(-p0[i])" _n
+    file write py "c=[1.0 if i>j else 0.0 for i in range(K) for j in range(K)]" _n
+    file write py "x,val,unb=solve_min(A,b,c)" _n
+    file write py "if x is None: raise RuntimeError('feasibility LP failed')" _n
+    file write py "min_def=val" _n
+    file write py "if min_def>maxdef: maxdef=min_def+1e-6" _n
+    file write py "groups=list(range(K)) if atindex==0 else [atindex-1]" _n
+    file write py "N=n+K+1; tix=N-1" _n
+    file write py "A=[]; b=[]" _n
+    file write py "for j in range(K):" _n
+    file write py "    row=[0.0]*N" _n
+    file write py "    for i in range(K): row[idx(i,j)] = 1.0" _n
+    file write py "    row[tix] = -p1[j]" _n
+    file write py "    A.append(row); b.append(0.0); A.append([-v for v in row]); b.append(0.0)" _n
+    file write py "for i in range(K):" _n
+    file write py "    row=[0.0]*N" _n
+    file write py "    for j in range(K): row[idx(i,j)] = 1.0" _n
+    file write py "    row[tix] = -p0[i]" _n
+    file write py "    A.append(row); b.append(0.0); A.append([-v for v in row]); b.append(0.0)" _n
+    file write py "row=[0.0]*N" _n
+    file write py "for g in groups: row[idx(g,g)] = 1.0" _n
+    file write py "A.append(row); b.append(1.0); A.append([-v for v in row]); b.append(-1.0)" _n
+    file write py "for k in range(K):" _n
+    file write py "    row=[0.0]*N" _n
+    file write py "    for i in range(K):" _n
+    file write py "        if i!=k: row[idx(i,k)] = -1.0" _n
+    file write py "    row[n+k] = -1.0" _n
+    file write py "    row[tix] = md[k]" _n
+    file write py "    A.append(row); b.append(0.0)" _n
+    file write py "row=[0.0]*N" _n
+    file write py "for i in range(K):" _n
+    file write py "    for j in range(K):" _n
+    file write py "        if i>j: row[idx(i,j)] = 1.0" _n
+    file write py "row[tix] = -maxdef" _n
+    file write py "A.append(row); b.append(0.0)" _n
+    file write py "obj=[0.0]*N" _n
+    file write py "for g in groups: obj[n+g] = 1.0" _n
+    file write py "x2,val2,unb2=solve_min(A,b,obj)" _n
+    file write py "if x2 is None: raise RuntimeError('fractional LP failed')" _n
+    file write py "with open(outp,'w') as f:" _n
+    file write py "    f.write('lb %s\\n' % val2)" _n
+    file write py "    f.write('min_defier_share %s\\n' % min_def)" _n
+    file write py "    f.write('maxdefiersshare_used %s\\n' % maxdef)" _n
+    file close py
+
+    quietly shell python3 `pysrc' `lpinput' `lpout'
+    if _rc {
+        di as err "python-based LP solver failed"
         exit 498
     }
 
-    scalar min_defier_share = d_min
-    scalar maxdef_eff = `maxdefiersshare'
-    if maxdef_eff < d_min {
-        scalar maxdef_eff = d_min + 1e-6
-        di as txt "note: maxdefiersshare() below data-feasible minimum; using " %9.6f maxdef_eff
+    tempname lb min_def maxdef_used
+    scalar `lb' = .
+    scalar `min_def' = .
+    scalar `maxdef_used' = .
+
+    file open rf using `lpout', read text
+    file read rf line
+    while r(eof)==0 {
+        local key : word 1 of `line'
+        local val : word 2 of `line'
+        if "`key'" == "lb" scalar `lb' = real("`val'")
+        if "`key'" == "min_defier_share" scalar `min_def' = real("`val'")
+        if "`key'" == "maxdefiersshare_used" scalar `maxdef_used' = real("`val'")
+        file read rf line
     }
-    scalar d_max = min(d_data_max, maxdef_eff)
+    file close rf
 
-    if (`atgroup' != `m_lo') & (`atgroup' != `m_hi') {
-        di as err "at_group must equal one of mediator levels: `m_lo' or `m_hi'"
-        exit 198
-    }
+    return scalar lb = `lb'
+    return scalar min_defier_share = `min_def'
+    return scalar maxdefiersshare_used = `maxdef_used'
 
-    scalar best_lb = .
-    scalar best_d = .
-
-    // Candidate d values: endpoints + kinks from positive-part terms.
-    local d_candidates `=d_min' `=d_max' `=maxdiff_lo' `=maxdiff_hi-theta_c0'
-    foreach dc of local d_candidates {
-        scalar d_try = `dc'
-        if d_try < d_min - 1e-10 continue
-        if d_try > d_max + 1e-10 continue
-
-        scalar theta_nt_try = p_m1_lo - d_try
-        scalar theta_at_try = p_m0_hi - d_try
-        scalar theta_c_try = theta_c0 + d_try
-
-        scalar v_lo_try = max(maxdiff_lo - d_try, 0)
-        scalar v_hi_try = max(maxdiff_hi - theta_c_try, 0)
-
-        scalar lb_try = .
-        if `atgroup' == `m_lo' {
-            if theta_nt_try > 0 scalar lb_try = v_lo_try / theta_nt_try
-        }
-        else if `atgroup' == `m_hi' {
-            if theta_at_try > 0 scalar lb_try = v_hi_try / theta_at_try
-        }
-        else {
-            scalar denom_try = theta_nt_try + theta_at_try
-            if denom_try > 0 scalar lb_try = (v_lo_try + v_hi_try) / denom_try
-        }
-
-        if missing(best_lb) | (!missing(lb_try) & lb_try < best_lb) {
-            scalar best_lb = lb_try
-            scalar best_d = d_try
-        }
-    }
-
-    // Evaluate all reported quantities at the optimizing defier share.
-    scalar theta_nt = p_m1_lo - best_d
-    scalar theta_at = p_m0_hi - best_d
-    scalar theta_c  = theta_c0 + best_d
-
-    scalar v_lo = max(maxdiff_lo - best_d, 0)
-    scalar v_hi = max(maxdiff_hi - theta_c, 0)
-
-    scalar lb_lo = .
-    scalar lb_hi = .
-    if theta_nt > 0 scalar lb_lo = v_lo / theta_nt
-    if theta_at > 0 scalar lb_hi = v_hi / theta_at
-
-    scalar lb = best_lb
-
-    return scalar lb = lb
-    return scalar lb_group_lo = lb_lo
-    return scalar lb_group_hi = lb_hi
-    return scalar theta_nt = theta_nt
-    return scalar theta_at = theta_at
-    return scalar theta_c = theta_c
-    return scalar defier_share = best_d
-    return scalar min_defier_share = min_defier_share
-    return scalar maxdefiersshare_used = maxdef_eff
-    return scalar max_p_diff_lo = maxdiff_lo
-    return scalar max_p_diff_hi = maxdiff_hi
-    return scalar m_lo = `m_lo'
-    return scalar m_hi = `m_hi'
-
-    di as txt "testmechs_lb_fracaffected (MVP)"
-    di as res "  lower bound = " %9.6f lb
+    di as txt "testmechs_lb_fracaffected"
+    di as res "  lower bound = " %9.6f `lb'
 end

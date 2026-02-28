@@ -6,10 +6,10 @@ This repository contains an **MVP Stata translation** of key functionality from 
 - ✅ Implemented: `testmechs_lb_fracaffected` (MVP version of R `lb_frac_affected()`), **default path only**
 - ✅ Supported inputs:
   - Positional varlist: **`d m y`** (all numeric)
-  - Options: `atgroup(#)` and `numybins(#)`
-- 🚫 Not yet implemented (will error in MVP):
-  - `regformula()`, `continuousy`
-  - `maxdefiersshare()>0`, `allowmindefiers`, `returnmindefiers`
+  - Options: `atgroup(#)`, `numybins(#)`, `maxdefiersshare(#)`, `allowmindefiers`
+  - Multi-valued discrete mediators (default binned-Y path)
+- 🚫 Not yet implemented (will error):
+  - `regformula()`, `continuousy`, `returnmindefiers`
   - Additional inference/plotting functions (e.g., `test_sharp_null`)
 
 The original R source is kept under `r_reference/` for translation and validation.
@@ -43,8 +43,8 @@ This replicates the README example from the TestMechs R package for the experime
 use "mother_data.dta", clear
 
 * varlist order is: d m y
-testmechs_lb_fracaffected treat grandmother motherfinancial, numybins(5) atgroup(0)
+testmechs_lb_fracaffected treat relationship_husb motherfinancial, numybins(5)
 ```
 Expected output (MVP):
 
-lower bound = 0.185891 (R README benchmark: 0.1858912)
+lower bound = 0.100221 (R benchmark: 0.1002207)
