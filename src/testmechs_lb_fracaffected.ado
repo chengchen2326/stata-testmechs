@@ -1,7 +1,7 @@
 program define testmechs_lb_fracaffected, rclass
     version 16.0
 
-    syntax varlist(min=3 max=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string) allowmindefiers]
+    syntax varlist(min=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string) allowmindefiers]
 
     if ("`numybins'" == "") local numybins 5
     if ("`maxdefiersshare'" == "") local maxdefiersshare 0
@@ -9,17 +9,35 @@ program define testmechs_lb_fracaffected, rclass
     local maxdefiersshare = real("`maxdefiersshare'")
 
     marksample touse
-    gettoken d rest : varlist
-    gettoken m y : rest
-
+    local nvars : word count `varlist'
+    local d : word 1 of `varlist'
+    local y : word `nvars' of `varlist'
+    local mvars
+    forvalues i = 2/`=`nvars'-1' {
+        local mi : word `i' of `varlist'
+        local mvars `mvars' `mi'
+    }
+    local nmvars : word count `mvars'
+	
     if `maxdefiersshare' < 0 {
         di as err "maxdefiersshare() must be nonnegative"
         exit 198
     }
 
-    tempvar wt touse2 ywork
-    quietly gen double `wt' = 1 if `touse'
-    quietly gen byte `touse2' = `touse' & !missing(`d', `m', `y', `wt')
+    tempvar wt touse2 ywork missm mgroup
+quietly gen double `wt' = 1 if `touse'
+quietly egen byte `missm' = rowmiss(`mvars') if `touse'
+quietly gen byte `touse2' = `touse' & !missing(`d', `y', `wt') & `missm' == 0
+
+* Preserve original mediator values if there is only one mediator.
+* Only create grouped joint mediator values when there are two mediators.
+if `nmvars' == 1 {
+    local m : word 1 of `mvars'
+    quietly gen double `mgroup' = `m' if `touse2'
+}
+else {
+    quietly egen long `mgroup' = group(`mvars') if `touse2'
+}
 
     quietly count if `touse2' & !inlist(`d', 0, 1)
     if r(N) > 0 {
@@ -39,7 +57,7 @@ program define testmechs_lb_fracaffected, rclass
     if `numybins' > 0 quietly xtile `ywork' = `y' if `touse2', nq(`numybins')
     else quietly gen double `ywork' = `y' if `touse2'
 
-    quietly levelsof `m' if `touse2', local(mlevels)
+    quietly levelsof `mgroup' if `touse2', local(mlevels)
     local K : word count `mlevels'
     if `K' < 2 {
         di as err "mediator must have at least 2 observed levels"
@@ -59,17 +77,17 @@ program define testmechs_lb_fracaffected, rclass
     local k = 0
     foreach mv of local mlevels {
         local ++k
-        quietly summarize `wt' if `touse2' & `d' == 1 & `m' == `mv', meanonly
+        quietly summarize `wt' if `touse2' & `d' == 1 & `mgroup' == `mv', meanonly
         matrix `p1'[`k',1] = r(sum) / W1
-        quietly summarize `wt' if `touse2' & `d' == 0 & `m' == `mv', meanonly
+        quietly summarize `wt' if `touse2' & `d' == 0 & `mgroup' == `mv', meanonly
         matrix `p0'[`k',1] = r(sum) / W0
 
-        quietly levelsof `ywork' if `touse2' & `m' == `mv', local(yvals)
+        quietly levelsof `ywork' if `touse2' & `mgroup' == `mv', local(yvals)
         scalar thisdiff = 0
         foreach yv of local yvals {
-            quietly summarize `wt' if `touse2' & `d' == 1 & `m' == `mv' & `ywork' == `yv', meanonly
+            quietly summarize `wt' if `touse2' & `d' == 1 & `mgroup' == `mv' & `ywork' == `yv', meanonly
             scalar p1y = r(sum) / W1
-            quietly summarize `wt' if `touse2' & `d' == 0 & `m' == `mv' & `ywork' == `yv', meanonly
+            quietly summarize `wt' if `touse2' & `d' == 0 & `mgroup' == `mv' & `ywork' == `yv', meanonly
             scalar p0y = r(sum) / W0
             scalar thisdiff = thisdiff + max(p1y - p0y, 0)
         }
@@ -91,10 +109,14 @@ program define testmechs_lb_fracaffected, rclass
     }
 
     tempfile lpinput lpout pysrc
-    file open fh using `lpinput', write text replace
+	capture file close fh
+    capture file close py
+    capture file open fh using `lpinput', write text replace
     file write fh "K `K'" _n
     file write fh "atindex `atindex'" _n
     file write fh "maxdef `maxdefiersshare'" _n
+    local allowmin = cond("`allowmindefiers'" != "", 1, 0)
+    file write fh "allowmin `allowmin'" _n
     forvalues i = 1/`K' {
         local p1i = `p1'[`i',1]
         local p0i = `p0'[`i',1]
@@ -103,7 +125,7 @@ program define testmechs_lb_fracaffected, rclass
     }
     file close fh
 
-    file open py using `pysrc', write text replace
+    capture file open py using `pysrc', write text replace
     file write py "import sys" _n
     file write py "EPS=1e-9" _n
     file write py "INF=1e100" _n
@@ -178,8 +200,8 @@ program define testmechs_lb_fracaffected, rclass
     file write py "    return x,-val,unb" _n
     file write py "inp,outp=sys.argv[1],sys.argv[2]" _n
     file write py "lines=[x.strip().split() for x in open(inp) if x.strip()]" _n
-    file write py "K=int(lines[0][1]); atindex=int(lines[1][1]); maxdef=float(lines[2][1])" _n
-    file write py "rows=lines[3:3+K]" _n
+    file write py "K=int(lines[0][1]); atindex=int(lines[1][1]); maxdef=float(lines[2][1]); allowmin=int(lines[3][1])" _n
+    file write py "rows=lines[4:4+K]" _n
     file write py "p1=[float(r[2]) for r in rows]; p0=[float(r[3]) for r in rows]; md=[float(r[4]) for r in rows]" _n
     file write py "def idx(i,j): return i*K+j" _n
     file write py "n=K*K" _n
@@ -196,7 +218,9 @@ program define testmechs_lb_fracaffected, rclass
     file write py "x,val,unb=solve_min(A,b,c)" _n
     file write py "if x is None: raise RuntimeError('feasibility LP failed')" _n
     file write py "min_def=val" _n
-    file write py "if min_def>maxdef: maxdef=min_def+1e-6" _n
+    file write py "if min_def>maxdef:" _n
+    file write py "    if allowmin==1: maxdef=min_def+1e-6" _n
+    file write py "    else: raise RuntimeError('data incompatible with maxdefiersshare when allowmindefiers is off')" _n
     file write py "groups=list(range(K)) if atindex==0 else [atindex-1]" _n
     file write py "N=n+K+1; tix=N-1" _n
     file write py "A=[]; b=[]" _n
