@@ -17,17 +17,27 @@ program define testmechs_lb_fracaffected, rclass
         local mi : word `i' of `varlist'
         local mvars `mvars' `mi'
     }
-
+    local nmvars : word count `mvars'
+	
     if `maxdefiersshare' < 0 {
         di as err "maxdefiersshare() must be nonnegative"
         exit 198
     }
 
     tempvar wt touse2 ywork missm mgroup
-    quietly gen double `wt' = 1 if `touse'
-    quietly egen byte `missm' = rowmiss(`mvars') if `touse'
-    quietly gen byte `touse2' = `touse' & !missing(`d', `y', `wt') & `missm' == 0
+quietly gen double `wt' = 1 if `touse'
+quietly egen byte `missm' = rowmiss(`mvars') if `touse'
+quietly gen byte `touse2' = `touse' & !missing(`d', `y', `wt') & `missm' == 0
+
+* Preserve original mediator values if there is only one mediator.
+* Only create grouped joint mediator values when there are two mediators.
+if `nmvars' == 1 {
+    local m : word 1 of `mvars'
+    quietly gen double `mgroup' = `m' if `touse2'
+}
+else {
     quietly egen long `mgroup' = group(`mvars') if `touse2'
+}
 
     quietly count if `touse2' & !inlist(`d', 0, 1)
     if r(N) > 0 {
@@ -99,7 +109,9 @@ program define testmechs_lb_fracaffected, rclass
     }
 
     tempfile lpinput lpout pysrc
-    file open fh using `lpinput', write text replace
+	capture file close fh
+    capture file close py
+    capture file open fh using `lpinput', write text replace
     file write fh "K `K'" _n
     file write fh "atindex `atindex'" _n
     file write fh "maxdef `maxdefiersshare'" _n
@@ -113,7 +125,7 @@ program define testmechs_lb_fracaffected, rclass
     }
     file close fh
 
-    file open py using `pysrc', write text replace
+    capture file open py using `pysrc', write text replace
     file write py "import sys" _n
     file write py "EPS=1e-9" _n
     file write py "INF=1e100" _n

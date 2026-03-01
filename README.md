@@ -3,27 +3,47 @@
 This repository contains an **MVP Stata translation** of key functionality from Jon Roth & Soonwoo Kwon’s **TestMechs** R package (paper: *Testing Mechanisms*).
 
 ## Status (MVP scope)
-- ✅ Implemented: `testmechs_lb_fracaffected` (MVP version of R `lb_frac_affected()`), **default path only**
-- ✅ Supported inputs:
-  - Positional varlist: **`d m y`** (all numeric)
-  - Options: `atgroup(#)`, `numybins(#)`, `maxdefiersshare(#)`, `allowmindefiers`
-  - Multi-valued discrete mediators (default binned-Y path)
-- 🚫 Not yet implemented (will error):
-  - `regformula()`, `continuousy`, `returnmindefiers`
-  - Additional inference/plotting functions (e.g., `test_sharp_null`)
+
+### Implemented
+- ✅ `testmechs_lb_fracaffected`  
+  Stata translation of the R function `lb_frac_affected()`
+
+### Currently supported features
+- Positional varlist input:
+  - **`d m y`** for a single mediator
+  - **`d m1 m2 y`** for a pooled two-mediator input
+- `atgroup(#)`
+- `numybins(#)`
+- `maxdefiersshare(#)`
+- `allowmindefiers`
+- Multi-valued discrete mediators in the default binned-Y path
+- Pooled lower bounds across two mediator variables
+
+### Not yet implemented
+The following are **not yet implemented** and will return an error:
+- 🚫 `regformula()`
+- 🚫 `continuousy`
+- 🚫 `returnmindefiers`
+- 🚫 Additional inference/plotting functions (e.g. `test_sharp_null`)
 
 The original R source is kept under `r_reference/` for translation and validation.
+
+---
 
 ## Data (for replication)
 
 This repo includes two Stata datasets converted from the TestMechs R package data (`.rda`) for convenience:
 
-- `baranov_data.dta`: raw dataset converted from the R package data object `baranov_data`.
-- `mother_data.dta`: analysis dataset corresponding to the experimental sample used in the README example, created by restricting to `THP_sample == 1`.
+- `baranov_data.dta`  
+  Raw dataset converted from the R package data object `baranov_data`
+- `mother_data.dta`  
+  Analysis dataset corresponding to the experimental sample used in the README examples, created by restricting to `THP_sample == 1`
 
-Notes:
+### Notes
 - These `.dta` files are provided for quick replication in Stata.
 - They are derived from the original R package data; see `r_reference/` for the upstream source.
+
+---
 
 ## Installation
 
@@ -33,18 +53,168 @@ Install using `net install` from GitHub:
 cap noi net uninstall testmechs
 net install testmechs, from("https://raw.githubusercontent.com/chengchen2326/stata-testmechs/main") replace
 ```
-## Examples
 
-### Lower bound on fraction affected (default/recommended path)
-
-This replicates the README example from the TestMechs R package for the experimental sample.
+You can verify that Stata finds the installed command with:
 
 ```stata
-use "mother_data.dta", clear
+which testmechs_lb_fracaffected
+help testmechs_lb_fracaffected
+```
+
+---
+
+## Examples
+
+### 1. Lower bound on the fraction of never-takers affected
+
+The test above suggests that the treatment effect does not operate entirely through the presence of a grandmother in the home. There are some people (never-takers) whose outcome is affected by the treatment despite having no change in `M`. It must be that some other mechanism mattered for these people.
+
+But how prevalent are these alternative mechanisms? To give a sense, we compute lower bounds on the fraction of never-takers whose outcome is affected by the treatment despite having the same value of `M` under both treatments. This gives a sense of the strength of mechanisms other than `M`: it tells us what fraction of the never-takers have a direct effect of the treatment.
+
+The argument `at_group = 0` corresponds to computing this lower bound for the never-takers, who are referred to as “0-always takers” in the more general notation in the paper.
+
+#### R benchmark
+
+```r
+lb_nts <- lb_frac_affected(
+  df = mother_data,
+  d = "treat",
+  m = "grandmother",
+  y = "motherfinancial",
+  num_Ybins = 5,
+  at_group = 0
+)
+lb_nts
+#> [1] 0.1858912
+```
+
+#### Stata
+
+```stata
+use "data/mother_data.dta", clear
 
 * varlist order is: d m y
-testmechs_lb_fracaffected treat relationship_husb motherfinancial, numybins(5)
+testmechs_lb_fracaffected treat grandmother motherfinancial, ///
+    numybins(5) atgroup(0)
 ```
-Expected output (MVP):
 
-lower bound = 0.100221 (R benchmark: 0.1002207)
+#### Expected output
+- `lower bound = 0.185891` (R benchmark: `0.1858912`)
+
+Our estimates imply that at least 19 percent of never-takers are affected by the treatment.
+
+One could likewise test the fraction of never-takers affected by setting `at_group = 1` (in this case, the lower bound is zero). If `at_group` is set to `NULL`, then the package calculates the fraction pooling across all types that have the same value of `M` under both treatments (i.e. always-takers and never-takers when `M` is binary).
+
+---
+
+### 2. Lower bound under relaxed monotonicity (`max_defiers_share`)
+
+Likewise, we can also calculate the lower bound on the fraction of never-takers under relaxed monotonicity.
+
+#### R benchmark
+
+```r
+lb_nts_defiers <- lb_frac_affected(
+  df = mother_data,
+  d = "treat",
+  m = "grandmother",
+  y = "motherfinancial",
+  num_Ybins = 5,
+  at_group = 0,
+  max_defiers_share = .01
+)
+lb_nts_defiers
+#> [1] 0.1716415
+```
+
+#### Stata
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m y
+testmechs_lb_fracaffected treat grandmother motherfinancial, ///
+    numybins(5) atgroup(0) maxdefiersshare(.01)
+```
+
+#### Expected output
+- `lower bound = 0.171642` (R benchmark: `0.1716415`)
+
+---
+
+### 3. Multi-valued mediator example with `allow_min_defiers`
+
+We can also estimate a pooled lower bound when the mediator is multi-valued.
+
+#### R benchmark
+
+```r
+lb_frac_affected(
+  df = mother_data,
+  d = "treat",
+  m = "relationship_husb",
+  y = "motherfinancial",
+  num_Ybins = 5,
+  at_group = NULL,
+  allow_min_defiers = TRUE
+)
+#> [1] 0.1002207
+```
+
+#### Stata
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m y
+* omit atgroup() to match at_group = NULL
+testmechs_lb_fracaffected treat relationship_husb motherfinancial, ///
+    numybins(5) allowmindefiers
+```
+
+#### Expected output
+- `lower bound = 0.100221` (R benchmark: `0.1002207`)
+
+---
+
+### 4. Pooled lower bound across two mediator variables
+
+Again, we can estimate a lower bound on the fraction of those affected by treatment, pooled across different mediator variables.
+
+#### R benchmark
+
+```r
+lb_frac_both <- lb_frac_affected(
+  df = mother_data,
+  d = "treat",
+  m = c("relationship_husb", "grandmother"),
+  y = "motherfinancial",
+  num_Ybins = 5,
+  allow_min_defiers = TRUE
+)
+lb_frac_both
+#> [1] 0.07251284
+```
+
+#### Stata
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m1 m2 y
+testmechs_lb_fracaffected treat relationship_husb grandmother motherfinancial, ///
+    numybins(5) allowmindefiers
+```
+
+#### Expected output
+- `lower bound = 0.072513` (R benchmark: `0.07251284`)
+
+We estimate a lower bound of about 7 percent, although this does not appear to be statistically significant given the test result above.
+
+---
+
+## Notes
+
+- The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
+- At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
+- Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
