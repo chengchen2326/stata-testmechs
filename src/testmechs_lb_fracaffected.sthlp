@@ -8,7 +8,7 @@
 {title:Syntax}
 
 {p 8 12}
-{cmd:testmechs_lb_fracaffected} {it:d m y} {ifin} [{it:weight}] [{cmd:,} {opt atgroup(#)} {opt numybins(#)} {opt maxdefiersshare(#)} {opt allowmindefiers}]
+{cmd:testmechs_lb_fracaffected} {it:d m1 [m2 ...] y} {ifin} [{it:weight}] [{cmd:,} {opt atgroup(#)} {opt numybins(#)} {opt maxdefiersshare(#)} {opt allowmindefiers}]
 
 {title:Description}
 
@@ -19,7 +19,7 @@ This command supports:
 {pmore}
 - binary treatment {it:d} coded 0/1
 {break}
-- multi-valued discrete mediator {it:m}
+- one or more discrete mediator variables {it:m1 [m2 ...]} (treated jointly as a multi-valued mediator)
 {break}
 - discrete outcome {it:y} (or discretized via {opt numybins()})
 {break}
@@ -42,10 +42,10 @@ Default is 5.
 {opt maxdefiersshare(#)} sets an upper bound on the share of defiers. Default is 0.
 
 {phang}
-{opt allowmindefiers} accepted for compatibility with the R interface. Current
-implementation follows the R default behavior ({cmd:allow_min_defiers = TRUE}) and
-will automatically increase {cmd:maxdefiersshare()} to the data-feasible minimum
-(plus a tiny tolerance) when needed.
+{opt allowmindefiers} when specified, if the requested {opt maxdefiersshare()}
+is infeasible the command increases it to the minimum feasible value plus a tiny
+tolerance (matching the R option {cmd:allow_min_defiers = TRUE}). If omitted,
+infeasible {opt maxdefiersshare()} causes an error.
 
 {title:Returned results}
 
