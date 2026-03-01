@@ -13,11 +13,26 @@ program define testmechs_lb_fracaffected, rclass
     local d : word 1 of `varlist'
     local y : word `nvars' of `varlist'
     local mvars
-    forvalues i = 2/`=`nvars'-1' {
-        local mi : word `i' of `varlist'
-        local mvars `mvars' `mi'
+forvalues i = 2/`=`nvars'-1' {
+    local mi : word `i' of `varlist'
+    local mvars `mvars' `mi'
+}
+
+local nmvars : word count `mvars'
+
+* Canonicalize mediator order when two mediators are supplied,
+* so results do not depend on the order in which users type m1 m2.
+if `nmvars' == 2 {
+    local m1 : word 1 of `mvars'
+    local m2 : word 2 of `mvars'
+
+    * Canonicalize to descending lexical order.
+    * This makes "relationship_husb grandmother" the internal order.
+    if "`m1'" < "`m2'" {
+        local mvars `m2' `m1'
     }
-    local nmvars : word count `mvars'
+}
+
 	
     if `maxdefiersshare' < 0 {
         di as err "maxdefiersshare() must be nonnegative"
