@@ -213,8 +213,54 @@ We estimate a lower bound of about 7 percent, although this does not appear to b
 
 ---
 
+### 5. Testing the sharp null of full mediation (Cox and Shi, 2023)
+
+While the lower-bound calculations above can hint at a violation of full mediation, they do not provide uncertainty quantification. The sharp null test conducts statistical inference for the sharp null of full mediation using the method described in Section 4 of the paper.
+
+In the upstream R package, `test_sharp_null()` supports multiple test procedures. The **recommended default** for most applications is the Cox and Shi (2023) test (`method = "CS"`). Other methods (e.g., `ARP`, `FSST`, and for binary mediators `toru`) are available in R, but are **not** implemented in this Stata MVP.
+
+#### R benchmark (Cox–Shi / CS)
+
+```r
+test_result <- test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = "grandmother",
+  y = "motherfinancial",
+  method = "CS",      # Cox and Shi (recommended default)
+  num_Ybins = 5,      # discretize Y into 5 bins
+  cluster = "uc"      # cluster at uc level
+)
+test_result$pval
+#>            [,1]
+#> [1,] 0.02283916
+```
+
+#### Stata (Cox–Shi / CS)
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m y
+testmechs_test_sharpnull treat grandmother motherfinancial, ///
+    method(CS) numybins(5) cluster(uc)
+```
+
+#### Expected output (matches R)
+- `test_stat = 7.558558`
+- `cv        = 5.991465`
+- `p-value   = 0.02283916`
+
+Interpretation:
+- The p-value is about **0.023**, so the sharp null is rejected at the **5%** significance level.
+- As in the R documentation, the reported p-value corresponds to the smallest value of **α** for which the test rejects.
+- The test discretizes `Y` into bins (here `numybins(5)`). Since the inference relies on a CLT approximation, choose the number of bins small enough that the CLT is reasonable within cells defined by the combination of `(Y, M, D)` (and clusters if `cluster()` is used).
+
+---
+
 ## Notes
 
 - The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
 - At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
 - Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
+- **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
