@@ -6,3 +6,5 @@ d   net install testmechs, from("https://raw.githubusercontent.com/chengchen2326
 d
 f src/testmechs_lb_fracaffected.ado
 f src/testmechs_lb_fracaffected.sthlp
+f src/testmechs_test_sharpnull.ado
+f src/testmechs_test_sharpnull.sthlp
