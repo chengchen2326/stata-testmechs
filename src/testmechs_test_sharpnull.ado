@@ -215,15 +215,15 @@ real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
 
 real colvector testmechs__qp_active_set(real matrix H, real colvector f, real matrix G, real colvector h, real scalar tol)
 {
-    real scalar p, m, i, iter, maxiter, added, dropi, worst
-    real colvector x, v, lambda, w, active, ia, rhs
+    real scalar p, m, iter, maxiter, dropi, worst, j, found
+    real colvector x, v, lambda, active, ia, rhs, sol, cand
     real matrix KKT, GW
 
     p = cols(H)
     m = rows(G)
     maxiter = 500
 
-    H = H + 1e-10*I(p)
+    H = H + 1e-8*I(p)
     x = cholsolve(cholesky(H), f)
     active = J(m,1,0)
 
@@ -234,28 +234,60 @@ real colvector testmechs__qp_active_set(real matrix H, real colvector f, real ma
         if (worst <= tol) {
             ia = selectindex(active)
             if (rows(ia)==0) return(x)
+
             GW = G[ia,.]
+            if (rank(GW) < rows(GW)) {
+                _error(498, "Active set became linearly dependent before multiplier step")
+            }
+
             KKT = (H, GW' \ GW, J(rows(ia), rows(ia), 0))
             rhs = (f \ h[ia])
-            lambda = lusolve(KKT, rhs)[(p+1)..rows(rhs)]
+            sol = lusolve(KKT, rhs)
+            if (any(sol :>= .)) {
+                _error(498, "KKT solve failed in multiplier step")
+            }
+
+            lambda = sol[(p+1)..rows(rhs)]
+
             if (min(lambda) >= -tol) return(x)
+
             dropi = ia[selectindex(lambda :== min(lambda))[1]]
             active[dropi] = 0
             continue
         }
 
-        added = selectindex((v :== worst) :& (active:==0))
-        if (rows(added)==0) added = selectindex(v :> tol)
-        if (rows(added)==0) return(x)
-        active[added[1]] = 1
+        cand = selectindex((v :== worst) :& (active :== 0))
+        if (rows(cand)==0) cand = selectindex((v :> tol) :& (active :== 0))
+        if (rows(cand)==0) return(x)
 
-        ia = selectindex(active)
-        GW = G[ia,.]
-        KKT = (H, GW' \ GW, J(rows(ia), rows(ia), 0))
-        rhs = (f \ h[ia])
-        x = lusolve(KKT, rhs)[1..p]
+        found = 0
+     for (j=1; j<=rows(cand); j++) {
+         active[cand[j]] = 1
+         ia = selectindex(active)
+         GW = G[ia,.]
+ 
+         if (rank(GW) == rows(GW)) {
+             KKT = (H, GW' \ GW, J(rows(ia), rows(ia), 0))
+             rhs = (f \ h[ia])
+             sol = lusolve(KKT, rhs)
+ 
+             if (all(sol :< .)) {
+                 found = 1
+                 break
+             }
+         }
+ 
+         active[cand[j]] = 0
+     }
+ 
+     if (!found) {
+         _error(498, "No violated constraint can be added without making KKT numerically singular")
+     }
+ 
+     x = sol[1..p]
     }
 
+    _error(498, "Active-set QP did not converge within maxiter")
     return(x)
 }
 
@@ -331,7 +363,7 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     g = rows(clu)
     ifs_cl = J(g, cols(ifs), 0)
     for (i=1; i<=g; i++) {
-        ifs_cl[i,.] = colsum(select(ifs, cl :== clu[i]))
+        ifs_cl[i,.] = colsum(ifs[selectindex(cl :== clu[i]), .])
     }
     sigma_obs = (g > 1 ? g/(g-1) : 1) * (ifs_cl' * ifs_cl) / (n^2)
 
@@ -347,11 +379,14 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     d_Z = J(rows(A),1,0)
     C_Z = A
 
-    eval = eigenvalues(sigma)
+        symeigensystem((sigma + sigma')/2, evec, eval)
+    eval = Re(eval)
+
     if (min(eval) < 1e-8) {
-        symeigensystem(sigma, evec, eval)
         keep = selectindex(eval :> 1e-8)
-        B_Z = evec[,keep]
+        if (rows(keep) == 0) _error(498, "No positive eigenvalues in sigma")
+
+        B_Z = evec[, keep]
         beta_red = B_Z' * beta
         d_Z = d_Z + B_Z * beta_red - beta
         sigma = diag(eval[keep])
@@ -386,6 +421,7 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
 
     tol = 1e-8
     xhat = testmechs__qp_active_set(Dmat, dvec, Gqp, hqp, tol)
+	if (any(xhat :>= .)) _error(498, "xhat contains missing values")
 
     test_stat = ((beta_red - xhat[1..r])' * sigmaInv * (beta_red - xhat[1..r]))[1,1]
 
@@ -404,9 +440,15 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     else {
         dof_n = 0
     }
-
+    
+	if (dof_n <= 0) {
+    cv = 0
+    pval = (test_stat <= 0 ? 1 : 0)
+}
+else {
     cv = invchi2(dof_n, 1-alpha)
     pval = chi2tail(dof_n, test_stat)
+}
 
     st_numscalar("__tm_pval", pval)
     st_numscalar("__tm_test_stat", test_stat)
