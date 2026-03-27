@@ -7,7 +7,7 @@
 
 {title:Description}
 {pstd}
-Minimal MVP implementation of TestMechs sharp-null test for the Cox & Shi method with a binary mediator.
+Minimal MVP implementation of TestMechs sharp-null test for the Cox & Shi method with a single discrete mediator (binary or multi-valued).
 
 {title:Options}
 {phang}{cmd:method(string)} must be {cmd:CS}.

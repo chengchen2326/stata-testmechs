@@ -26,12 +26,10 @@ program define testmechs_test_sharpnull, rclass
 
     quietly levelsof `m' if `touse2', local(mlevels)
     local nm : word count `mlevels'
-    if (`nm' != 2) {
-        di as err "Only binary mediator is supported; m must have exactly two observed levels"
+    if (`nm' < 2) {
+        di as err "Mediator must have at least two observed levels"
         exit 198
     }
-	local m0 : word 1 of `mlevels'
-    local m1 : word 2 of `mlevels'
 
     quietly count if `touse2' & !inlist(`d',0,1)
     if (r(N) > 0) {
@@ -107,7 +105,7 @@ else {
     }
 }
 
-mata: testmechs__sharpnull_cs("`d'","`m'","`ywork'","`clusterid'","`touse2'",0.05, `m0', `m1')
+mata: testmechs__sharpnull_cs("`d'","`m'","`ywork'","`clusterid'","`touse2'",0.05)
 
     return scalar pval      = scalar(__tm_pval)
 return scalar test_stat = scalar(__tm_test_stat)
@@ -235,11 +233,37 @@ real scalar testmechs__subset_min_qp(real colvector Y, real matrix Sigma, real m
     return(best)
 }
 
+real colvector testmechs__pgd_qp(real colvector Y, real matrix Sigma, real scalar maxit, real scalar tol)
+{
+    real matrix Q
+    real colvector mu, grad, mu_new
+    real rowvector evals
+    real scalar L, step, it
+
+    Q = pinv(Sigma)
+    evals = eigenvalues((Q+Q')/2)'
+    L = 2*max(evals)
+    if (L <= 0 | missing(L)) L = 1
+    step = 1/L
+
+    mu = Y
+    mu = min(mu, J(rows(mu),1,0))
+
+    for (it=1; it<=maxit; it++) {
+        grad = 2*Q*(mu - Y)
+        mu_new = mu - step*grad
+        mu_new = min(mu_new, J(rows(mu_new),1,0))
+        if (max(abs(mu_new - mu)) < tol) break
+        mu = mu_new
+    }
+    return(mu)
+}
+
 void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scalar yvar,
-    string scalar clvar, string scalar tousevar, real scalar alpha, real scalar m0, real scalar m1)
+    string scalar clvar, string scalar tousevar, real scalar alpha)
 {
     real colvector d, m, y, cl, yvals, mvals
-    real scalar n, j, k, g, pd0, pd1, tol, test_stat, df, cv, pval, tauhat, betahat, bindnorm
+    real scalar n, j, k, kk, g, pd0, pd1, tol, test_stat, df, cv, pval, tauhat, betahat, bindnorm, K
     real colvector beta, Yorig, Y, muhat, eval, idx, p00, p01, p10, p11, b, resid, isbind, numerator, denominator, valid, clu
     real matrix ifs, ifs_cl, Sigma, S, V, M, A, AsigA
 
@@ -299,8 +323,8 @@ st_numscalar("__tm_step", 10)
     if (rows(d) == 0) _error(2000, "No complete-case observations after filtering")
 	
 yvals = uniqrows(sort(y,1))
-mvals = (m0 \ m1)
-if (m0 == m1) _error(198, "Binary mediator required (m levels are not distinct)")
+mvals = uniqrows(sort(m,1))
+K = rows(mvals)
 
 // ---- TEST2 DEBUG: what does Mata see for clusters? ----
 cl = vec(cl)
@@ -323,19 +347,39 @@ if (G_mata < 2) _error(198, "Need at least 2 clusters for cluster-robust inferen
 
     j = rows(yvals)
 	st_numscalar("__tm_j", j)
-    p00 = J(j,1,.)
-    p01 = J(j,1,.)
-    p10 = J(j,1,.)
-    p11 = J(j,1,.)
+    if (K == 2) {
+        p00 = J(j,1,.)
+        p01 = J(j,1,.)
+        p10 = J(j,1,.)
+        p11 = J(j,1,.)
 
-    for (k = 1; k <= j; k++) {
-        p00[k] = mean((y :== yvals[k]) :& (m :== mvals[1]) :& (d :== 0)) / pd0
-        p01[k] = mean((y :== yvals[k]) :& (m :== mvals[1]) :& (d :== 1)) / pd1
-        p10[k] = mean((y :== yvals[k]) :& (m :== mvals[2]) :& (d :== 0)) / pd0
-        p11[k] = mean((y :== yvals[k]) :& (m :== mvals[2]) :& (d :== 1)) / pd1
+        for (k = 1; k <= j; k++) {
+            p00[k] = mean((y :== yvals[k]) :& (m :== mvals[1]) :& (d :== 0)) / pd0
+            p01[k] = mean((y :== yvals[k]) :& (m :== mvals[1]) :& (d :== 1)) / pd1
+            p10[k] = mean((y :== yvals[k]) :& (m :== mvals[2]) :& (d :== 0)) / pd0
+            p11[k] = mean((y :== yvals[k]) :& (m :== mvals[2]) :& (d :== 1)) / pd1
+        }
+        beta = (p00 - p01) \ (p11 - p10)
     }
+    else {
+        real colvector pm0, pm1, sgn
+        pm0 = J(K,1,.)
+        pm1 = J(K,1,.)
+        for (kk = 1; kk <= K; kk++) {
+            pm0[kk] = mean((m :== mvals[kk]) :& (d :== 0)) / pd0
+            pm1[kk] = mean((m :== mvals[kk]) :& (d :== 1)) / pd1
+        }
+        sgn = 2 :* (pm1 :>= pm0) :- 1
 
-    beta = (p00 - p01) \ (p11 - p10)
+        beta = J(K*j,1,.)
+        for (kk = 1; kk <= K; kk++) {
+            for (k = 1; k <= j; k++) {
+                beta[(kk-1)*j + k] = sgn[kk] * ///
+                    (mean((y :== yvals[k]) :& (m :== mvals[kk]) :& (d :== 1)) / pd1 - ///
+                     mean((y :== yvals[k]) :& (m :== mvals[kk]) :& (d :== 0)) / pd0)
+            }
+        }
+    }
 	st_matrix("__tm_beta", beta)
     st_matrix("__tm_Yorig", -beta)
     Yorig = -beta
@@ -343,13 +387,37 @@ if (G_mata < 2) _error(198, "Need at least 2 clusters for cluster-robust inferen
 	//debugD
 	st_numscalar("__tm_step", 20)
 
-    ifs = J(n, 2*j, .)
-    for (k = 1; k <= j; k++) {
-        ifs[,k] = (d :== 0) :* (((y :== yvals[k]) :& (m :== mvals[1])) :- p00[k]) / pd0 -
-                   (d :== 1) :* (((y :== yvals[k]) :& (m :== mvals[1])) :- p01[k]) / pd1
+    if (K == 2) {
+        ifs = J(n, 2*j, .)
+        for (k = 1; k <= j; k++) {
+            ifs[,k] = (d :== 0) :* (((y :== yvals[k]) :& (m :== mvals[1])) :- p00[k]) / pd0 -
+                       (d :== 1) :* (((y :== yvals[k]) :& (m :== mvals[1])) :- p01[k]) / pd1
 
-        ifs[,j+k] = (d :== 1) :* (((y :== yvals[k]) :& (m :== mvals[2])) :- p11[k]) / pd1 -
-                     (d :== 0) :* (((y :== yvals[k]) :& (m :== mvals[2])) :- p10[k]) / pd0
+            ifs[,j+k] = (d :== 1) :* (((y :== yvals[k]) :& (m :== mvals[2])) :- p11[k]) / pd1 -
+                         (d :== 0) :* (((y :== yvals[k]) :& (m :== mvals[2])) :- p10[k]) / pd0
+        }
+    }
+    else {
+        real colvector pm0, pm1, sgn
+        pm0 = J(K,1,.)
+        pm1 = J(K,1,.)
+        for (kk = 1; kk <= K; kk++) {
+            pm0[kk] = mean((m :== mvals[kk]) :& (d :== 0)) / pd0
+            pm1[kk] = mean((m :== mvals[kk]) :& (d :== 1)) / pd1
+        }
+        sgn = 2 :* (pm1 :>= pm0) :- 1
+
+        ifs = J(n, K*j, .)
+        for (kk = 1; kk <= K; kk++) {
+            for (k = 1; k <= j; k++) {
+                real scalar p0kk, p1kk
+                p0kk = mean((y :== yvals[k]) :& (m :== mvals[kk]) :& (d :== 0)) / pd0
+                p1kk = mean((y :== yvals[k]) :& (m :== mvals[kk]) :& (d :== 1)) / pd1
+                ifs[, (kk-1)*j + k] = sgn[kk] * ///
+                    ((d :== 1) :* (((y :== yvals[k]) :& (m :== mvals[kk])) :- p1kk) / pd1 - ///
+                     (d :== 0) :* (((y :== yvals[k]) :& (m :== mvals[kk])) :- p0kk) / pd0)
+            }
+        }
     }
 	
 	//debug E 
@@ -391,7 +459,19 @@ st_numscalar("__tm_rank", rows(Sigma))
 	//debug G
 	st_numscalar("__tm_step", 50)
 
-    test_stat = testmechs__subset_min_qp(Y, S, A, b, tol, muhat)
+    if (K == 2) {
+        test_stat = testmechs__subset_min_qp(Y, S, A, b, tol, muhat)
+    }
+    else {
+        muhat = testmechs__pgd_qp(Y, S, 10000, 1e-10)
+        resid = A*muhat - b
+        if (min(resid) < -1e-7) {
+            muhat = min(muhat, J(rows(muhat),1,0))
+        }
+        real colvector v
+        v = vec(Y - muhat)
+        test_stat = (v' * pinv(S) * v)[1,1]
+    }
     //debug H
 	st_numscalar("__tm_step", 60)
 	

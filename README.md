@@ -251,6 +251,30 @@ testmechs_test_sharpnull treat grandmother motherfinancial, ///
 - `cv        = 5.991465`
 - `p-value   = 0.02283916`
 
+#### Multi-valued mediator benchmark
+
+```r
+test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = "relationship_husb",
+  y = "motherfinancial",
+  method = "CS",
+  num_Ybins = 5,
+  cluster = "uc"
+)$pval
+#> [1] 0.02838332
+```
+
+```stata
+use "data/mother_data.dta", clear
+
+testmechs_test_sharpnull treat relationship_husb motherfinancial, ///
+    method(CS) numybins(5) cluster(uc)
+```
+
+Expected p-value: `0.02838332`.
+
 Interpretation:
 - The p-value is about **0.023**, so the sharp null is rejected at the **5%** significance level.
 - As in the R documentation, the reported p-value corresponds to the smallest value of **α** for which the test rejects.
