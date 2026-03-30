@@ -264,3 +264,47 @@ Interpretation:
 - At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
 - Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
 - **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
+
+---
+
+### 6. Results for an alternative mechanism (`relationship_husb`)
+
+We next turn to the setting where we are interested in testing whether the effect is mediated by relationship quality with the husband, which is measured on a 1-5 scale. We can again test the sharp null and estimate a lower bound on the fraction affected.
+
+#### R benchmark (Cox–Shi / CS)
+
+```r
+test_result_husb <- test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = "relationship_husb",
+  y = "motherfinancial",
+  method = "CS",      # Cox and Shi (recommended default)
+  num_Ybins = 5,      # discretize Y into 5 bins
+  cluster = "uc"      # cluster at uc level
+)
+test_result_husb$pval
+#>            [,1]
+#> [1,] 0.02838332
+```
+
+#### Stata (Cox–Shi / CS)
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m y
+testmechs_test_sharpnull treat relationship_husb motherfinancial, ///
+    method(CS) numybins(5) cluster(uc)
+```
+
+#### Expected output (matches R)
+- `test_stat = 10.84325`
+- `cv        = 9.487729`
+- `p-value   = 0.02838332`
+
+Interpretation:
+- The p-value is about **0.028**, so the sharp null is rejected at the **5%** significance level.
+- This suggests that the treatment effect is not fully mediated by relationship quality with the husband alone.
+- As above, the test discretizes `Y` into bins, so the choice of `numybins(5)` should balance granularity with the quality of the asymptotic approximation within `(Y, M, D)` cells.
+
