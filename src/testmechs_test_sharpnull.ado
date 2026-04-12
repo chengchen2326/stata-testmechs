@@ -1,6 +1,6 @@
 program define testmechs_test_sharpnull, rclass
     version 16.0
-    syntax varlist(min=3 max=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
+    syntax varlist(min=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
 
     if ("`method'" != "CS") {
         di as err "Only method(CS) is supported in this MVP implementation"
@@ -9,14 +9,29 @@ program define testmechs_test_sharpnull, rclass
 
     marksample touse
 
+    local nvars : word count `varlist'
     local d : word 1 of `varlist'
-    local m : word 2 of `varlist'
-    local y : word 3 of `varlist'
+    local y : word `nvars' of `varlist'
+    local mvars
+    forvalues i = 2/`=`nvars'-1' {
+        local mi : word `i' of `varlist'
+        local mvars `mvars' `mi'
+    }
+    local nmvars : word count `mvars'
 
-    tempvar touse2 clusterid
+    tempvar touse2 clusterid missm mgroup
     quietly gen byte `touse2' = `touse'
-    quietly replace `touse2' = 0 if missing(`d', `m', `y')
+    quietly egen byte `missm' = rowmiss(`mvars') if `touse2'
+    quietly replace `touse2' = 0 if missing(`d', `y') | `missm' > 0
     if ("`cluster'" != "") quietly replace `touse2' = 0 if missing(`cluster')
+
+    if (`nmvars' == 1) {
+        local m : word 1 of `mvars'
+        quietly gen double `mgroup' = `m' if `touse2'
+    }
+    else {
+        quietly egen long `mgroup' = group(`mvars') if `touse2'
+    }
 
     quietly count if `touse2'
     if (r(N) == 0) {
@@ -65,7 +80,7 @@ program define testmechs_test_sharpnull, rclass
         }
     }
 
-    mata: testmechs__sharpnull_cs("`d'","`m'","`y'","`clusterid'","`touse2'",0.05,`numybins',1)
+    mata: testmechs__sharpnull_cs("`d'","`mgroup'","`mvars'","`y'","`clusterid'","`touse2'",0.05,`numybins',1)
 
     return scalar pval      = scalar(__tm_pval)
     return scalar test_stat = scalar(__tm_test_stat)
@@ -108,13 +123,14 @@ real colvector testmechs__discretize_y(real colvector y, real scalar numBins)
     return(yout)
 }
 
-real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
+real matrix testmechs__build_Aobs(real matrix ord, real scalar Jy)
 {
-    real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx
+    real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx, K
     real colvector keep_theta, map_theta
     real matrix A
 
-    ntheta = K*(K+1)/2
+    K = rows(ord)
+    ntheta = sum(vec(ord))
     ndelta = K*Jy
     p = ntheta + ndelta
 
@@ -122,7 +138,7 @@ real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
     for (k=1; k<=K; k++) {
         for (l=1; l<=K; l++) {
             oldidx = (k-1)*K + l
-            if (l<=k) keep_theta[oldidx] = 1
+            if (ord[l,k]) keep_theta[oldidx] = 1
         }
     }
     map_theta = J(K*K,1,0)
@@ -167,13 +183,14 @@ real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
     return(A)
 }
 
-real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
+real matrix testmechs__build_Ashp(real matrix ord, real scalar Jy)
 {
-    real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx
+    real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx, K
     real colvector keep_theta, map_theta
     real matrix A
 
-    ntheta = K*(K+1)/2
+    K = rows(ord)
+    ntheta = sum(vec(ord))
     ndelta = K*Jy
     p = ntheta + ndelta
 
@@ -181,7 +198,7 @@ real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
     for (k=1; k<=K; k++) {
         for (l=1; l<=K; l++) {
             oldidx = (k-1)*K + l
-            if (l<=k) keep_theta[oldidx] = 1
+            if (ord[l,k]) keep_theta[oldidx] = 1
         }
     }
     map_theta = J(K*K,1,0)
@@ -291,14 +308,15 @@ real colvector testmechs__qp_active_set(real matrix H, real colvector f, real ma
     return(x)
 }
 
-void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scalar yvar,
+void testmechs__sharpnull_cs(string scalar dvar, string scalar mgroupvar, string scalar mvars,
+    string scalar yvar,
     string scalar clvar, string scalar tousevar, real scalar alpha, real scalar numybins, real scalar new_dof_CS)
 {
     real colvector d, m, y, cl, yvals, mvals, beta_obs, beta_shp, beta, d_Z
     real colvector p_m0, p_m1, p_ym0, p_ym1, beta_red, xhat, lvec, uvec, dvec, khat, clu, hqp
     real colvector if0, if1, ifm0, ifm1
-    real scalar n, k, jy, i, ii, g, pd0, pd1, test_stat, dof_n, cv, pval, r, q, d_nuis, tol
-    real matrix ifs, ifs_cl, sigma_obs, A_obs, A_shp, A, sigma, eval, evec, B_Z, C_Z
+    real scalar n, k, jy, i, ii, g, pd0, pd1, test_stat, dof_n, cv, pval, r, q, d_nuis, tol, qmed, idx
+    real matrix ifs, ifs_cl, sigma_obs, A_obs, A_shp, A, sigma, eval, evec, B_Z, C_Z, msupp, ord, mmat
     real matrix sigmaInv, Amat, Amat_aug, Dmat, Gqp
 
     real colvector keep
@@ -306,12 +324,13 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     if (rows(keep) == 0) _error(2000, "No observations in estimation sample")
 
     d  = vec(st_data(keep, dvar))
-    m  = vec(st_data(keep, mvar))
+    m  = vec(st_data(keep, mgroupvar))
     y  = vec(st_data(keep, yvar))
     cl = vec(st_data(keep, clvar))
+    mmat = st_data(keep, tokens(mvars))
 
     keep = selectindex((d :< .) :& (m :< .) :& (y :< .) :& (cl :< .))
-    d = d[keep]; m = m[keep]; y = y[keep]; cl = cl[keep]
+    d = d[keep]; m = m[keep]; y = y[keep]; cl = cl[keep]; mmat = mmat[keep,.]
     if (rows(d) == 0) _error(2000, "No complete-case observations after filtering")
 
     y = testmechs__discretize_y(y, numybins)
@@ -320,6 +339,28 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     mvals = uniqrows(sort(m,1))
     jy = rows(yvals)
     k = rows(mvals)
+    qmed = cols(mmat)
+
+    msupp = J(k, qmed, .)
+    for (i=1; i<=k; i++) {
+        idx = selectindex(m :== mvals[i])[1]
+        msupp[i,.] = mmat[idx,.]
+    }
+    ord = J(k, k, 0)
+    if (qmed == 1) {
+        for (i=1; i<=k; i++) {
+            for (r=1; r<=k; r++) {
+                ord[i,r] = (i <= r)
+            }
+        }
+    }
+    else {
+        for (i=1; i<=k; i++) {
+            for (r=1; r<=k; r++) {
+                ord[i,r] = all(msupp[i,.] :<= msupp[r,.])
+            }
+        }
+    }
 
     n = rows(y)
     pd0 = mean(d :== 0)
@@ -367,8 +408,8 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     }
     sigma_obs = (g > 1 ? g/(g-1) : 1) * (ifs_cl' * ifs_cl) / (n^2)
 
-    A_obs = testmechs__build_Aobs(k, jy)
-    A_shp = testmechs__build_Ashp(k, jy)
+    A_obs = testmechs__build_Aobs(ord, jy)
+    A_shp = testmechs__build_Ashp(ord, jy)
     beta_shp = J(rows(A_shp),1,0)
 
     beta = beta_obs \ beta_shp
