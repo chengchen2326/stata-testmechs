@@ -1,6 +1,6 @@
 program define testmechs_test_sharpnull, rclass
     version 16.0
-    syntax varlist(min=3 max=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
+    syntax varlist(min=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
 
     if ("`method'" != "CS") {
         di as err "Only method(CS) is supported in this MVP implementation"
@@ -9,13 +9,51 @@ program define testmechs_test_sharpnull, rclass
 
     marksample touse
 
+    local nvars : word count `varlist'
     local d : word 1 of `varlist'
-    local m : word 2 of `varlist'
-    local y : word 3 of `varlist'
+    local y : word `nvars' of `varlist'
+    local mvars
+    forvalues i = 2/`=`nvars'-1' {
+        local mi : word `i' of `varlist'
+        local mvars `mvars' `mi'
+    }
+    local nmvars : word count `mvars'
 
-    tempvar touse2 clusterid
+    * Canonicalize mediator order for multi-mediator inputs so results
+    * are invariant to the order in which users type mediators.
+    if `nmvars' > 1 {
+        local msorted
+        while "`mvars'" != "" {
+            gettoken tok mvars : mvars
+            local inserted 0
+            local newlist
+            foreach cur of local msorted {
+                if !`inserted' & ("`tok'" > "`cur'") {
+                    local newlist `newlist' `tok'
+                    local inserted 1
+                }
+                local newlist `newlist' `cur'
+            }
+            if !`inserted' local newlist `newlist' `tok'
+            local msorted `newlist'
+        }
+        local mvars `msorted'
+    }
+
+    tempvar touse2 clusterid missm mgroup
     quietly gen byte `touse2' = `touse'
-    quietly replace `touse2' = 0 if missing(`d', `m', `y')
+    quietly egen byte `missm' = rowmiss(`mvars') if `touse'
+    quietly replace `touse2' = 0 if missing(`d', `y') | `missm' > 0
+
+    if `nmvars' == 1 {
+        local m : word 1 of `mvars'
+        quietly gen double `mgroup' = `m' if `touse2'
+    }
+    else {
+        quietly egen long `mgroup' = group(`mvars') if `touse2'
+    }
+
+    local m `mgroup'
     if ("`cluster'" != "") quietly replace `touse2' = 0 if missing(`cluster')
 
     quietly count if `touse2'
