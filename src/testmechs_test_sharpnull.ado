@@ -1,9 +1,14 @@
 program define testmechs_test_sharpnull, rclass
     version 16.0
-    syntax varlist(min=3 max=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
+    syntax varlist(min=3 max=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname) MAXDEFIERSSHARE(real 0)]
 
     if ("`method'" != "CS") {
         di as err "Only method(CS) is supported in this MVP implementation"
+        exit 198
+    }
+
+    if (`maxdefiersshare' < 0 | `maxdefiersshare' > 1) {
+        di as err "maxdefiersshare() must be between 0 and 1"
         exit 198
     }
 
@@ -65,7 +70,7 @@ program define testmechs_test_sharpnull, rclass
         }
     }
 
-    mata: testmechs__sharpnull_cs("`d'","`m'","`y'","`clusterid'","`touse2'",0.05,`numybins',1)
+    mata: testmechs__sharpnull_cs("`d'","`m'","`y'","`clusterid'","`touse2'",0.05,`numybins',1,`maxdefiersshare')
 
     return scalar pval      = scalar(__tm_pval)
     return scalar test_stat = scalar(__tm_test_stat)
@@ -108,21 +113,23 @@ real colvector testmechs__discretize_y(real colvector y, real scalar numBins)
     return(yout)
 }
 
-real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
+real matrix testmechs__build_Aobs(real scalar K, real scalar Jy, real scalar max_defiers_share)
 {
     real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx
     real colvector keep_theta, map_theta
     real matrix A
 
-    ntheta = K*(K+1)/2
+    ntheta = (max_defiers_share==0 ? K*(K+1)/2 : K*K)
     ndelta = K*Jy
     p = ntheta + ndelta
 
-    keep_theta = J(K*K,1,0)
-    for (k=1; k<=K; k++) {
-        for (l=1; l<=K; l++) {
-            oldidx = (k-1)*K + l
-            if (l<=k) keep_theta[oldidx] = 1
+    keep_theta = J(K*K,1,(max_defiers_share==0 ? 0 : 1))
+    if (max_defiers_share==0) {
+        for (k=1; k<=K; k++) {
+            for (l=1; l<=K; l++) {
+                oldidx = (k-1)*K + l
+                if (l<=k) keep_theta[oldidx] = 1
+            }
         }
     }
     map_theta = J(K*K,1,0)
@@ -167,21 +174,23 @@ real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
     return(A)
 }
 
-real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
+real matrix testmechs__build_Ashp(real scalar K, real scalar Jy, real scalar max_defiers_share)
 {
-    real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx
+    real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx, def_row
     real colvector keep_theta, map_theta
     real matrix A
 
-    ntheta = K*(K+1)/2
+    ntheta = (max_defiers_share==0 ? K*(K+1)/2 : K*K)
     ndelta = K*Jy
     p = ntheta + ndelta
 
-    keep_theta = J(K*K,1,0)
-    for (k=1; k<=K; k++) {
-        for (l=1; l<=K; l++) {
-            oldidx = (k-1)*K + l
-            if (l<=k) keep_theta[oldidx] = 1
+    keep_theta = J(K*K,1,(max_defiers_share==0 ? 0 : 1))
+    if (max_defiers_share==0) {
+        for (k=1; k<=K; k++) {
+            for (l=1; l<=K; l++) {
+                oldidx = (k-1)*K + l
+                if (l<=k) keep_theta[oldidx] = 1
+            }
         }
     }
     map_theta = J(K*K,1,0)
@@ -193,7 +202,7 @@ real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
         }
     }
 
-    A = J(K + p, p, 0)
+    A = J(K + (max_defiers_share!=0) + p, p, 0)
 
     // For each k: sum_{l != k} theta_lk - sum_y delta_yk <= 0
     for (k=1; k<=K; k++) {
@@ -207,8 +216,18 @@ real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
         }
     }
 
+    if (max_defiers_share!=0) {
+        def_row = K + 1
+        for (k=1; k<=K; k++) {
+            for (l=1; l<=K; l++) {
+                oldidx = (k-1)*K + l
+                if (l>k & map_theta[oldidx] > 0) A[def_row, map_theta[oldidx]] = -1
+            }
+        }
+    }
+
     // nonnegativity
-    A[(K+1)..(K+p),.] = I(p)
+    A[(K + (max_defiers_share!=0) + 1)..(K + (max_defiers_share!=0) + p),.] = I(p)
 
     return(A)
 }
@@ -292,7 +311,7 @@ real colvector testmechs__qp_active_set(real matrix H, real colvector f, real ma
 }
 
 void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scalar yvar,
-    string scalar clvar, string scalar tousevar, real scalar alpha, real scalar numybins, real scalar new_dof_CS)
+    string scalar clvar, string scalar tousevar, real scalar alpha, real scalar numybins, real scalar new_dof_CS, real scalar max_defiers_share)
 {
     real colvector d, m, y, cl, yvals, mvals, beta_obs, beta_shp, beta, d_Z
     real colvector p_m0, p_m1, p_ym0, p_ym1, beta_red, xhat, lvec, uvec, dvec, khat, clu, hqp
@@ -367,9 +386,10 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     }
     sigma_obs = (g > 1 ? g/(g-1) : 1) * (ifs_cl' * ifs_cl) / (n^2)
 
-    A_obs = testmechs__build_Aobs(k, jy)
-    A_shp = testmechs__build_Ashp(k, jy)
+    A_obs = testmechs__build_Aobs(k, jy, max_defiers_share)
+    A_shp = testmechs__build_Ashp(k, jy, max_defiers_share)
     beta_shp = J(rows(A_shp),1,0)
+    if (max_defiers_share != 0) beta_shp[k+1] = -max_defiers_share
 
     beta = beta_obs \ beta_shp
     A = A_obs \ A_shp
