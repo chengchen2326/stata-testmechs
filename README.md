@@ -1,6 +1,6 @@
 # stata-testmechs (MVP)
 
-This repository contains an **MVP Stata translation** of key functionality from Jon Roth & Soonwoo Kwon’s **TestMechs** R package (paper: *Testing Mechanisms*).
+This repository contains an **MVP Stata translation** of key functionality from Jon Roth & Soonwoo Kwon's **TestMechs** R package (paper: *Testing Mechanisms*).
 
 ## Status (MVP scope)
 
@@ -11,13 +11,13 @@ This repository contains an **MVP Stata translation** of key functionality from 
 ### Currently supported features
 - Positional varlist input:
   - **`d m y`** for a single mediator
-  - **`d m1 m2 y`** for a pooled two-mediator input
+  - **`d m1 m2 y`** for a combination of both mechanisms (two-mediator input)
 - `atgroup(#)`
 - `numybins(#)`
 - `maxdefiersshare(#)`
 - `allowmindefiers`
 - Multi-valued discrete mediators in the default binned-Y path
-- Pooled lower bounds across two mediator variables
+- Lower bounds combining both mechanisms across two mediator variables
 
 ### Not yet implemented
 The following are **not yet implemented** and will return an error:
@@ -71,7 +71,7 @@ The test above suggests that the treatment effect does not operate entirely thro
 
 But how prevalent are these alternative mechanisms? To give a sense, we compute lower bounds on the fraction of never-takers whose outcome is affected by the treatment despite having the same value of `M` under both treatments. This gives a sense of the strength of mechanisms other than `M`: it tells us what fraction of the never-takers have a direct effect of the treatment.
 
-The argument `at_group = 0` corresponds to computing this lower bound for the never-takers, who are referred to as “0-always takers” in the more general notation in the paper.
+The argument `at_group = 0` corresponds to computing this lower bound for the never-takers, who are referred to as "0-always takers" in the more general notation in the paper.
 
 #### R benchmark
 
@@ -144,7 +144,7 @@ testmechs_lb_fracaffected treat grandmother motherfinancial, ///
 
 ### 3. Multi-valued mediator example with `allow_min_defiers`
 
-We can also estimate a pooled lower bound when the mediator is multi-valued.
+We can also estimate a lower bound combining both mechanisms when the mediator is multi-valued.
 
 #### R benchmark
 
@@ -177,9 +177,9 @@ testmechs_lb_fracaffected treat relationship_husb motherfinancial, ///
 
 ---
 
-### 4. Pooled lower bound across two mediator variables
+### 4. Combination of both mechanisms: lower bound across two mediator variables
 
-Again, we can estimate a lower bound on the fraction of those affected by treatment, pooled across different mediator variables.
+We can estimate a lower bound on the fraction of those affected by treatment, combining both mechanisms across two mediator variables.
 
 #### R benchmark
 
@@ -258,15 +258,6 @@ Interpretation:
 
 ---
 
-## Notes
-
-- The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
-- At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
-- Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
-- **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
-
----
-
 ### 6. Results for an alternative mechanism (`relationship_husb`)
 
 We next turn to the setting where we are interested in testing whether the effect is mediated by relationship quality with the husband, which is measured on a 1-5 scale. We can again test the sharp null and estimate a lower bound on the fraction affected.
@@ -308,3 +299,57 @@ Interpretation:
 - This suggests that the treatment effect is not fully mediated by relationship quality with the husband alone.
 - As above, the test discretizes `Y` into bins, so the choice of `numybins(5)` should balance granularity with the quality of the asymptotic approximation within `(Y, M, D)` cells.
 
+---
+
+### 7. Sharp null test under relaxed monotonicity (`maxdefiersshare`)
+
+By default, TestMechs imposes the monotonicity assumption that the treatment can only increase the value of `M`. In this setting, this means that everyone who would have a grandmother present without receiving CBT treatment would also have one present when receiving CBT treatment. We can relax this assumption by setting `maxdefiersshare` to be non-zero, which bounds the number of "defiers" by that share.
+
+We rerun the sharp null test above with `maxdefiersshare(0.01)`, which allows one percent of the population to be defiers.
+
+#### R benchmark (Cox–Shi / CS)
+
+```r
+test_result_defiers <- test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = "grandmother",
+  y = "motherfinancial",
+  method = "CS",
+  num_Ybins = 5,
+  cluster = "uc",
+  max_defiers_share = .01
+)
+test_result_defiers$pval
+#>            [,1]
+#> [1,] 0.04630939
+```
+
+#### Stata (Cox–Shi / CS)
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m y
+testmechs_test_sharpnull treat grandmother motherfinancial, ///
+    method(CS) numybins(5) cluster(uc) maxdefiersshare(0.01)
+```
+
+#### Expected output (matches R)
+- `test_stat = 6.144824`
+- `cv        = 5.991465`
+- `p-value   = 0.04630932`
+
+Interpretation:
+- The p-value increases to about **0.046**, so the test still rejects the sharp null even when allowing one percent of the population to be defiers.
+- Allowing for larger shares of defiers will eventually lead to an insignificant result.
+- As in the standard test, the reported p-value corresponds to the smallest value of **α** for which the test rejects.
+
+---
+
+## Notes
+
+- The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
+- At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
+- Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
+- **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
