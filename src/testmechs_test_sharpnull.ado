@@ -1,6 +1,6 @@
 program define testmechs_test_sharpnull, rclass
     version 16.0
-    syntax varlist(min=3 max=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
+    syntax varlist(min=3 numeric) [if] [in] , METHOD(string) [NUMYBINS(integer 5) CLUSTER(varname)]
 
     if ("`method'" != "CS") {
         di as err "Only method(CS) is supported in this MVP implementation"
@@ -9,13 +9,15 @@ program define testmechs_test_sharpnull, rclass
 
     marksample touse
 
+    local nvars : word count `varlist'
     local d : word 1 of `varlist'
-    local m : word 2 of `varlist'
-    local y : word 3 of `varlist'
+    local y : word `nvars' of `varlist'
+    local mlist : list varlist - d
+    local mlist : list mlist - y
 
     tempvar touse2 clusterid
     quietly gen byte `touse2' = `touse'
-    quietly replace `touse2' = 0 if missing(`d', `m', `y')
+    quietly replace `touse2' = 0 if missing(`d', `mlist', `y')
     if ("`cluster'" != "") quietly replace `touse2' = 0 if missing(`cluster')
 
     quietly count if `touse2'
@@ -65,7 +67,7 @@ program define testmechs_test_sharpnull, rclass
         }
     }
 
-    mata: testmechs__sharpnull_cs("`d'","`m'","`y'","`clusterid'","`touse2'",0.05,`numybins',1)
+    mata: testmechs__sharpnull_cs("`d'","`mlist'","`y'","`clusterid'","`touse2'",0.05,`numybins',1)
 
     return scalar pval      = scalar(__tm_pval)
     return scalar test_stat = scalar(__tm_test_stat)
@@ -108,7 +110,37 @@ real colvector testmechs__discretize_y(real colvector y, real scalar numBins)
     return(yout)
 }
 
-real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
+void testmechs__collapse_mediator(real matrix mmat, real colvector mcode, real matrix states, real matrix leq)
+{
+    real scalar n, p, i, j, l, k
+    real colvector idx, is_state, ord
+
+    n = rows(mmat)
+    p = cols(mmat)
+    ord = order(mmat, (1..p))
+    states = uniqrows(mmat[ord,.])
+    mcode = J(n,1,.)
+
+    for (i=1; i<=rows(states); i++) {
+        is_state = J(n,1,1)
+        for (j=1; j<=p; j++) {
+            is_state = is_state :& (mmat[,j] :== states[i,j])
+        }
+        idx = selectindex(is_state)
+        if (rows(idx) > 0) mcode[idx] = i
+    }
+
+    if (any(mcode :>= .)) _error(498, "Failed to map mediator combinations to coded states")
+
+    leq = J(rows(states), rows(states), 0)
+    for (l=1; l<=rows(states); l++) {
+        for (k=1; k<=rows(states); k++) {
+            leq[l,k] = min(states[l,.] :<= states[k,.])
+        }
+    }
+}
+
+real matrix testmechs__build_Aobs(real scalar K, real scalar Jy, real matrix leq)
 {
     real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx
     real colvector keep_theta, map_theta
@@ -122,7 +154,7 @@ real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
     for (k=1; k<=K; k++) {
         for (l=1; l<=K; l++) {
             oldidx = (k-1)*K + l
-            if (l<=k) keep_theta[oldidx] = 1
+            if (leq[l,k]) keep_theta[oldidx] = 1
         }
     }
     map_theta = J(K*K,1,0)
@@ -167,7 +199,7 @@ real matrix testmechs__build_Aobs(real scalar K, real scalar Jy)
     return(A)
 }
 
-real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
+real matrix testmechs__build_Ashp(real scalar K, real scalar Jy, real matrix leq)
 {
     real scalar ntheta, ndelta, p, r, k, l, yidx, oldidx
     real colvector keep_theta, map_theta
@@ -181,7 +213,7 @@ real matrix testmechs__build_Ashp(real scalar K, real scalar Jy)
     for (k=1; k<=K; k++) {
         for (l=1; l<=K; l++) {
             oldidx = (k-1)*K + l
-            if (l<=k) keep_theta[oldidx] = 1
+            if (leq[l,k]) keep_theta[oldidx] = 1
         }
     }
     map_theta = J(K*K,1,0)
@@ -291,7 +323,7 @@ real colvector testmechs__qp_active_set(real matrix H, real colvector f, real ma
     return(x)
 }
 
-void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scalar yvar,
+void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars, string scalar yvar,
     string scalar clvar, string scalar tousevar, real scalar alpha, real scalar numybins, real scalar new_dof_CS)
 {
     real colvector d, m, y, cl, yvals, mvals, beta_obs, beta_shp, beta, d_Z
@@ -300,20 +332,22 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     real scalar n, k, jy, i, ii, g, pd0, pd1, test_stat, dof_n, cv, pval, r, q, d_nuis, tol
     real matrix ifs, ifs_cl, sigma_obs, A_obs, A_shp, A, sigma, eval, evec, B_Z, C_Z
     real matrix sigmaInv, Amat, Amat_aug, Dmat, Gqp
+    real matrix mmat, mstates, leq
 
     real colvector keep
     keep = selectindex(st_data(., tousevar) :!= 0)
     if (rows(keep) == 0) _error(2000, "No observations in estimation sample")
 
     d  = vec(st_data(keep, dvar))
-    m  = vec(st_data(keep, mvar))
+    mmat = st_data(keep, tokens(mvars))
     y  = vec(st_data(keep, yvar))
     cl = vec(st_data(keep, clvar))
 
-    keep = selectindex((d :< .) :& (m :< .) :& (y :< .) :& (cl :< .))
-    d = d[keep]; m = m[keep]; y = y[keep]; cl = cl[keep]
+    keep = selectindex((d :< .) :& rowsum(mmat :< .) :== cols(mmat) :& (y :< .) :& (cl :< .))
+    d = d[keep]; mmat = mmat[keep,.]; y = y[keep]; cl = cl[keep]
     if (rows(d) == 0) _error(2000, "No complete-case observations after filtering")
 
+    testmechs__collapse_mediator(mmat, m, mstates, leq)
     y = testmechs__discretize_y(y, numybins)
 
     yvals = uniqrows(sort(y,1))
@@ -367,8 +401,8 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvar, string scal
     }
     sigma_obs = (g > 1 ? g/(g-1) : 1) * (ifs_cl' * ifs_cl) / (n^2)
 
-    A_obs = testmechs__build_Aobs(k, jy)
-    A_shp = testmechs__build_Ashp(k, jy)
+    A_obs = testmechs__build_Aobs(k, jy, leq)
+    A_shp = testmechs__build_Ashp(k, jy, leq)
     beta_shp = J(rows(A_shp),1,0)
 
     beta = beta_obs \ beta_shp
