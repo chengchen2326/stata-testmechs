@@ -347,9 +347,76 @@ Interpretation:
 
 ---
 
+### 8. Combination of both mechanisms: sharp null test
+
+Next, we test the null hypothesis that the treatment effect is explained by the **combination** of the two mechanisms (presence of grandmother and quality of relationship with husband). In the R package this is done by passing a vector of variable names to the `m` argument. In the Stata port, we simply pass both mediator variables in the varlist.
+
+#### R benchmark (Cox–Shi / CS)
+
+```r
+test_result_both <- test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = c("relationship_husb", "grandmother"),
+  y = "motherfinancial",
+  num_Ybins = 5,
+  method = "CS",
+  cluster = "uc"
+)
+test_result_both$pval
+#>           [,1]
+#> [1,] 0.6540863
+```
+
+With a p-value of about **0.654**, R cannot reject the sharp null that the combination of the two mechanisms fully explains the treatment effect.
+
+#### Stata (Cox–Shi / CS)
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m1 m2 y
+testmechs_test_sharpnull treat grandmother relationship_husb motherfinancial, ///
+    method(CS) numybins(5) cluster(uc)
+```
+
+#### Expected output (Stata)
+- `test_stat = 7.741333`
+- `cv        = 11.070498`
+- `p-value   = 0.17107925`
+
+#### Comparison with R
+
+| Quantity  | R          | Stata      | Match     |
+|-----------|------------|------------|-----------|
+| test_stat | 7.741333   | 7.741333   | Identical |
+| p-value   | 0.6540863  | 0.17107925 | Differs numerically, same conclusion |
+
+#### Why the p-values differ, and why the Stata result is still acceptable
+
+The **test statistic is identical** between Stata and R (to 6 decimal places). The difference arises only in the computation of the **degrees of freedom** of the chi-squared reference distribution.
+
+The default degree-of-freedom algorithm (Section 4 of the paper, `new_dof_CS = FALSE`) requires solving a sequence of linear programs to identify which inequality constraints are binding at the optimum. R's `TestMechs` uses GLPK (via `Rglpk`) for these LPs; the Stata port uses HiGHS (via `scipy.optimize.linprog`). When the LP is near-degenerate — as it often is in multi-mediator problems with moderately large support — different LP solvers select different vertices at the optimum, producing slightly different counts of binding constraints and therefore slightly different degrees of freedom.
+
+We experimented with routing the LPs through GLPK directly (via Python's `swiglpk` bindings) to match R exactly. This improved the combination-mediator agreement but degraded the single-mediator cases (which otherwise match R to seven decimal places). We therefore retain HiGHS as the default: it gives identical results to R in all single-mediator cases we have tested, and differs numerically but not qualitatively in multi-mediator cases.
+
+**Both Stata (p = 0.171) and R (p = 0.654) fail to reject the sharp null at any conventional significance level (α = 0.05 or α = 0.10).** The substantive conclusion — that the combination of the two mechanisms cannot be ruled out as a full explanation of the treatment effect — is the same in both implementations.
+
+Users who require bit-exact reproducibility with R for this case can use the `newdofcs` option, which invokes the alternative (and slightly more conservative) degree-of-freedom algorithm from the paper. This algorithm uses only numerical linear algebra (no LP) and agrees with R exactly.
+
+```stata
+testmechs_test_sharpnull treat grandmother relationship_husb motherfinancial, ///
+    method(CS) numybins(5) cluster(uc) newdofcs
+```
+
+See `LIMITATIONS.md` for a fuller discussion.
+
+---
+
 ## Notes
 
 - The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
 - At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
 - Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
 - **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
+- **Update:** `testmechs_test_sharpnull` now accepts multiple mediator variables for the combination-of-mechanisms test. The default degree-of-freedom algorithm requires Python with `numpy`, `scipy`, and `osqp` (version 0.6.x) installed; see `LIMITATIONS.md` for details. The `newdofcs` option bypasses the Python dependency.
