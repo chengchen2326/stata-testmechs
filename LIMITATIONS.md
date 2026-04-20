@@ -30,10 +30,6 @@ The R package uses GLPK (via the `Rglpk` R package) to solve these LPs. The Stat
 
 We experimented with routing the LPs through GLPK directly (via Python's `swiglpk` bindings) to match R exactly. This improved the multi-mediator agreement but degraded the single-mediator cases, because the QR-based rank computations downstream of the LP are themselves sensitive to the LP solver's choices. We therefore retain HiGHS as the default, which matches R exactly in the simpler cases and disagrees numerically but not qualitatively in the more complex cases.
 
-## The `newdofcs` option
-
-The R package exposes an alternative, simpler degree-of-freedom algorithm via the argument `new_dof_CS = TRUE`. Our Stata package exposes the same alternative via the `newdofcs` option. This algorithm does not require LP solves and is entirely numerical linear algebra; it agrees with R in all cases we have tested. If exact reproducibility across implementations matters for your application, using `newdofcs` will give you that at the cost of using a slightly different dof formula than the R default.
-
 ## Dependencies
 
 The default code path requires Python (via Stata's Python integration) with the following packages:

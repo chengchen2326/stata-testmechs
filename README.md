@@ -402,13 +402,6 @@ We experimented with routing the LPs through GLPK directly (via Python's `swiglp
 
 **Both Stata (p = 0.171) and R (p = 0.654) fail to reject the sharp null at any conventional significance level (α = 0.05 or α = 0.10).** The substantive conclusion — that the combination of the two mechanisms cannot be ruled out as a full explanation of the treatment effect — is the same in both implementations.
 
-Users who require bit-exact reproducibility with R for this case can use the `newdofcs` option, which invokes the alternative (and slightly more conservative) degree-of-freedom algorithm from the paper. This algorithm uses only numerical linear algebra (no LP) and agrees with R exactly.
-
-```stata
-testmechs_test_sharpnull treat grandmother relationship_husb motherfinancial, ///
-    method(CS) numybins(5) cluster(uc) newdofcs
-```
-
 See `LIMITATIONS.md` for a fuller discussion.
 
 ---
@@ -419,4 +412,4 @@ See `LIMITATIONS.md` for a fuller discussion.
 - At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
 - Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
 - **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
-- **Update:** `testmechs_test_sharpnull` now accepts multiple mediator variables for the combination-of-mechanisms test. The default degree-of-freedom algorithm requires Python with `numpy`, `scipy`, and `osqp` (version 0.6.x) installed; see `LIMITATIONS.md` for details. The `newdofcs` option bypasses the Python dependency.
+- **Update:** `testmechs_test_sharpnull` now accepts multiple mediator variables for the combination-of-mechanisms test. The default degree-of-freedom algorithm requires Python with `numpy`, `scipy`, and `osqp` (version 0.6.x) installed; see `LIMITATIONS.md` for details. 
