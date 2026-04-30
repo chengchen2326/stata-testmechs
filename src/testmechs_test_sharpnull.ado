@@ -1,3 +1,4 @@
+program _testmechs_dqrdc2_rank, plugin
 program define testmechs_test_sharpnull, rclass
     // Syntax: d m1 [m2 m3 ...] y , options
     // First word = treatment (d), last word = outcome (y), middle words = mediator(s)
@@ -368,15 +369,17 @@ real colvector testmechs__qp_active_set(real matrix H, real colvector f, real ma
 // Uses SVD: count singular values exceeding tol * sigma_max.
 real scalar testmechs__rank_tol(real matrix A, real scalar tol)
 {
-    real colvector s
-    real scalar smax
-
+    real scalar k
+    
     if (rows(A) == 0 | cols(A) == 0) return(0)
-    s = svdsv(A)
-    if (rows(s)*cols(s) == 0) return(0)
-    smax = max(s)
-    if (smax <= 0) return(0)
-    return(sum(s :> tol * smax))
+    
+    // Push matrix to Stata, call plugin, read result back
+    st_matrix("__tm_rank_M", A)
+    stata("scalar __tm_rank_result = .")
+    stata("plugin call _testmechs_dqrdc2_rank, __tm_rank_M " + char(34) + strofreal(tol, "%21.15e") + char(34) + " __tm_rank_result")
+    k = st_numscalar("__tm_rank_result")
+    
+    return(k)
 }
 
 // Rank-revealing column pivot via pivoted modified Gram-Schmidt.
