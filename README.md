@@ -7,6 +7,8 @@ This repository contains an **MVP Stata translation** of key functionality from 
 ### Implemented
 - ✅ `testmechs_lb_fracaffected`  
   Stata translation of the R function `lb_frac_affected()`
+- ✅ `testmechs_test_sharpnull`  
+  Stata translation of the R function `test_sharp_null()` for `method = "CS"` (Cox and Shi, 2023). Supports single mediators and combinations of mediators.
 
 ### Currently supported features
 - Positional varlist input:
@@ -18,13 +20,14 @@ This repository contains an **MVP Stata translation** of key functionality from 
 - `allowmindefiers`
 - Multi-valued discrete mediators in the default binned-Y path
 - Lower bounds combining both mechanisms across two mediator variables
+- Cox–Shi sharp null test with cluster-robust standard errors
 
 ### Not yet implemented
 The following are **not yet implemented** and will return an error:
 - 🚫 `regformula()`
 - 🚫 `continuousy`
 - 🚫 `returnmindefiers`
-- 🚫 Additional inference/plotting functions (e.g. `test_sharp_null`)
+- 🚫 Sharp-null methods other than `CS` (e.g., `ARP`, `FSST`, `toru`)
 
 The original R source is kept under `r_reference/` for translation and validation.
 
@@ -60,6 +63,32 @@ You can verify that Stata finds the installed command with:
 which testmechs_lb_fracaffected
 help testmechs_lb_fracaffected
 ```
+
+### Dependencies
+
+`testmechs_test_sharpnull` calls Python from Stata for the LP and QP subroutines that drive the Cox–Shi test. It requires:
+
+- **Stata 16+** with Python integration enabled (`help python`)
+- **Python 3** with the following packages:
+  - `numpy`
+  - `swiglpk` — Python bindings for the GLPK linear-programming solver. R's `TestMechs` uses GLPK (via `Rglpk_solve_LP`); using GLPK in Stata as well makes the implementations faithful to each other and eliminates LP-solver-induced numerical differences.
+  - `osqp` (version 0.6.x — note that 1.x is **not** compatible) for the QP step
+- **GLPK system library** (required by `swiglpk`):
+  - macOS: `brew install glpk`
+  - Debian/Ubuntu: `sudo apt install libglpk-dev`
+  - Other: see the [GLPK homepage](https://www.gnu.org/software/glpk/)
+
+Install the Python packages with:
+
+```bash
+pip install numpy swiglpk 'osqp<1'
+```
+
+### Plugin: `_testmechs_dqrdc2_rank.plugin`
+
+`testmechs_test_sharpnull` ships with a precompiled Stata plugin that calls R's `dqrdc2` Fortran routine for computing matrix rank. This is necessary because R's `qr(M, tol)$rank` uses a 1995 modification of LINPACK's `dqrdc` written by Ross Ihaka specifically for R, with a custom column-pivoting strategy that gives different results from generic SVD-based rank on near-rank-deficient matrices. Without this plugin, the Stata p-values would differ from R for several test cases. See `src/dqrdc2_src/` for the Fortran/C sources and `build.sh` for the build script.
+
+The bundled plugin is built for **macOS Apple Silicon** only. On other platforms, run `src/dqrdc2_src/build.sh` after adjusting compiler flags. Linux and Windows builds are straightforward but have not been pre-shipped.
 
 ---
 
@@ -290,7 +319,7 @@ testmechs_test_sharpnull treat relationship_husb motherfinancial, ///
 ```
 
 #### Expected output (matches R)
-- `test_stat = 10.84325`
+- `test_stat = 10.843249`
 - `cv        = 9.487729`
 - `p-value   = 0.02838332`
 
@@ -380,29 +409,24 @@ testmechs_test_sharpnull treat grandmother relationship_husb motherfinancial, //
     method(CS) numybins(5) cluster(uc)
 ```
 
-#### Expected output (Stata)
+#### Expected output (matches R)
 - `test_stat = 7.741333`
-- `cv        = 11.070498`
-- `p-value   = 0.17107925`
+- `cv        = 18.307038`
+- `p-value   = 0.65408650`
 
-#### Comparison with R
+Interpretation:
+- With a p-value of about **0.654**, the test cannot reject the sharp null that the combination of the two mechanisms fully explains the treatment effect.
+- This matches the R benchmark exactly (R: 0.6540863, Stata: 0.65408650).
 
-| Quantity  | R          | Stata      | Match     |
-|-----------|------------|------------|-----------|
-| test_stat | 7.741333   | 7.741333   | Identical |
-| p-value   | 0.6540863  | 0.17107925 | Differs numerically, same conclusion |
+---
 
-#### Why the p-values differ, and why the Stata result is still acceptable
+## Notes on numerical agreement with R
 
-The **test statistic is identical** between Stata and R (to 6 decimal places). The difference arises only in the computation of the **degrees of freedom** of the chi-squared reference distribution.
+All Cox–Shi p-values reported above match the R benchmark to at least 7 decimal places. Achieving this agreement required two design choices:
 
-The default degree-of-freedom algorithm (Section 4 of the paper, `new_dof_CS = FALSE`) requires solving a sequence of linear programs to identify which inequality constraints are binding at the optimum. R's `TestMechs` uses GLPK (via `Rglpk`) for these LPs; the Stata port uses HiGHS (via `scipy.optimize.linprog`). When the LP is near-degenerate — as it often is in multi-mediator problems with moderately large support — different LP solvers select different vertices at the optimum, producing slightly different counts of binding constraints and therefore slightly different degrees of freedom.
+1. **GLPK as the LP solver.** Earlier versions of this package used HiGHS (via `scipy.optimize.linprog`). HiGHS gave correct test statistics but selected slightly different LP vertices in near-degenerate cases, which propagated to small differences in the constraint-binding count and therefore the chi-squared degrees of freedom. Switching to GLPK (the same solver R uses) eliminates this source of disagreement.
 
-We experimented with routing the LPs through GLPK directly (via Python's `swiglpk` bindings) to match R exactly. This improved the combination-mediator agreement but degraded the single-mediator cases (which otherwise match R to seven decimal places). We therefore retain HiGHS as the default: it gives identical results to R in all single-mediator cases we have tested, and differs numerically but not qualitatively in multi-mediator cases.
-
-**Both Stata (p = 0.171) and R (p = 0.654) fail to reject the sharp null at any conventional significance level (α = 0.05 or α = 0.10).** The substantive conclusion — that the combination of the two mechanisms cannot be ruled out as a full explanation of the treatment effect — is the same in both implementations.
-
-See `LIMITATIONS.md` for a fuller discussion.
+2. **R's `dqrdc2` for rank computation.** R's `qr(M, tol)$rank` uses `dqrdc2.f` — a 1995 modification by Ross Ihaka of LINPACK's `dqrdc`, available only in R's source tree. It applies a custom column-pivoting strategy that diverges from generic SVD-based or LAPACK QR rank computations on near-rank-deficient matrices. The difference is rare but consequential: for the `relationship_husb` test, SVD-based rank gave dof = 5 where `dqrdc2` gives dof = 4, leading to p-values of 0.0546 vs 0.0284. We therefore ship a precompiled Stata plugin (`src/_testmechs_dqrdc2_rank.plugin`) that calls `dqrdc2` directly from Mata, matching R's rank exactly.
 
 ---
 
@@ -410,6 +434,5 @@ See `LIMITATIONS.md` for a fuller discussion.
 
 - The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
 - At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
-- Additional functions from the R package, including `test_sharp_null`, are planned but not yet implemented.
-- **Update:** the Cox–Shi sharp null test is now available as `testmechs_test_sharpnull` with `method(CS)`. Other sharp-null methods/branches remain out of scope for the MVP.
-- **Update:** `testmechs_test_sharpnull` now accepts multiple mediator variables for the combination-of-mechanisms test. The default degree-of-freedom algorithm requires Python with `numpy`, `scipy`, and `osqp` (version 0.6.x) installed; see `LIMITATIONS.md` for details. 
+- Additional sharp-null methods from the R package (`ARP`, `FSST`, `toru`) are not yet implemented and will return an error.
+- The default degree-of-freedom algorithm (`new_dof_CS = FALSE`) is implemented; the alternative (`new_dof_CS = TRUE`) Cox–Shi formulas remain on the roadmap.
