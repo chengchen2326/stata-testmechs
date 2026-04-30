@@ -1,7 +1,20 @@
+# macOS finder
 .DS_Store
-.DS_Store
-.DS_Store
+
+# R / RStudio
 .Rhistory
 .Rapp.history
+.RData
+.Ruserdata
+
+# Editor backups
 *.bak
 *.bak_*
+*.swp
+*~
+
+# Plugin build artifacts
+src/dqrdc2_src/*.o
+
+# Temp diagnostic outputs
+/tmp/stata_*.csv
