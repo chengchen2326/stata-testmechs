@@ -1,4 +1,6 @@
-program _testmechs_dqrdc2_rank, plugin
+capture program drop _testmechs_dqrdc2_rank
+capture program _testmechs_dqrdc2_rank, plugin
+
 program define testmechs_test_sharpnull, rclass
     // Syntax: d m1 [m2 m3 ...] y , options
     // First word = treatment (d), last word = outcome (y), middle words = mediator(s)
@@ -16,6 +18,26 @@ program define testmechs_test_sharpnull, rclass
         exit 198
     }
 	
+    // Platform check: dqrdc2 plugin is currently precompiled only for
+    // macOS Apple Silicon (MACARM64). Skip the check under -newdofcs- because
+    // the plugin is not called on that branch.
+    if ("`newdofcs'" == "") {
+        if !("`c(os)'" == "MacOSX" & "`c(machine_type)'" == "Mac (Apple Silicon)") {
+            di as err "testmechs_test_sharpnull (without -newdofcs-) requires the dqrdc2 plugin,"
+            di as err "which is currently precompiled only for macOS Apple Silicon."
+            di as err "Your platform: `c(os)' / `c(machine_type)'"
+            di as err ""
+            di as err "Options:"
+            di as err "  1. Rebuild the plugin from src/dqrdc2_src/ for your platform."
+            di as err "     macOS Intel:    ./build.sh   (may need flag adjustments)"
+            di as err "     Linux x86_64:   build script not yet provided"
+            di as err "     Windows x86_64: build script not yet provided"
+            di as err "  2. Use the -newdofcs- option to skip the dqrdc2 path"
+            di as err "     (alternative dof algorithm; still needs Python OSQP)."
+            exit 199
+        }
+    }
+
 	// Python availability check (only needed when newdofcs is NOT specified)
     // Checks each dependency independently and gives a specific install hint.
     if ("`newdofcs'" == "") {

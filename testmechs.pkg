@@ -1,4 +1,4 @@
-v 0.0.2
+v 0.0.3
 d TestMechs (MVP): Stata translation of Jon Roth & Soonwoo Kwon's TestMechs R package.
 d
 d Installation:
@@ -7,13 +7,14 @@ d
 d testmechs_test_sharpnull (Cox-Shi sharp null test) requires:
 d   - Python 3 with packages: numpy, swiglpk, osqp (version 0.6.x)
 d   - GLPK system library (macOS: brew install glpk; Debian/Ubuntu: apt install libglpk-dev)
-d   - Precompiled dqrdc2 plugin: ships for macOS Apple Silicon only.
-d     Other platforms must rebuild from src/dqrdc2_src/.
+d   - Precompiled dqrdc2 plugin: ships for macOS Apple Silicon (MACARM64) only.
+d     Other platforms must rebuild from src/dqrdc2_src/ - see build scripts.
 d
 f src/testmechs_lb_fracaffected.ado
 f src/testmechs_lb_fracaffected.sthlp
 f src/testmechs_test_sharpnull.ado
 f src/testmechs_test_sharpnull.sthlp
-F src/_testmechs_dqrdc2_rank.plugin
+G MACARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
+G OSX.ARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
 F _testmechs_lp_call.py
 F _testmechs_qp_call.py
