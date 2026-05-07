@@ -16,19 +16,42 @@ program define testmechs_test_sharpnull, rclass
         exit 198
     }
 	
-	// Python/scipy availability check (only needed when newdofcs is NOT specified)
+	// Python availability check (only needed when newdofcs is NOT specified)
+    // Checks each dependency independently and gives a specific install hint.
     if ("`newdofcs'" == "") {
+        // Step 1: Stata's Python integration must be configured
         capture python query
         if (_rc) {
-            di as err "This command requires Stata 16+ with Python integration when newdofcs is not specified."
-            di as err "Either set up Python (see {help python}), or add the -newdofcs- option."
+            di as err "testmechs_test_sharpnull requires Stata 16+ with Python integration."
+            di as err "Configure Python in Stata with:  python set exec /path/to/python3"
+            di as err "See {help python} for details."
             exit 199
         }
+
+        // Step 2: numpy (used by both the LP and QP wrappers)
+        capture python: import numpy
+        if (_rc) {
+            di as err "testmechs_test_sharpnull requires the Python package 'numpy'."
+            di as err "Install it with:  pip install numpy"
+            exit 199
+        }
+
+        // Step 3: swiglpk (GLPK bindings; LP step uses the same solver as R)
+        capture python: import swiglpk
+        if (_rc) {
+            di as err "testmechs_test_sharpnull requires the Python package 'swiglpk'."
+            di as err "Install it with:  pip install swiglpk"
+            di as err "On macOS you may also need:  brew install glpk"
+            di as err "On Debian/Ubuntu:           sudo apt install libglpk-dev"
+            exit 199
+        }
+
+        // Step 4: osqp 0.6.x (used by the QP step)
         capture python: import osqp
         if (_rc) {
-            di as err "This command requires the Python package 'osqp' (version 0.6.x) when newdofcs is not specified."
-            di as err "Install it with: pip install 'osqp<1'"
-            di as err "Or add the -newdofcs- option to use the alternative algorithm."
+            di as err "testmechs_test_sharpnull requires the Python package 'osqp' (version 0.6.x)."
+            di as err "Install it with:  pip install 'osqp<1'"
+            di as err "(osqp version 1.x is NOT compatible)"
             exit 199
         }
     }
