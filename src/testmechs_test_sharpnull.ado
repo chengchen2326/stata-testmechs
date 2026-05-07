@@ -486,7 +486,7 @@ void testmechs__lp_solve(real colvector c, real matrix A_eq, real colvector b_eq
     st_matrix("__tm_c",   c)
     st_matrix("__tm_Aeq", A_eq)
     st_matrix("__tm_beq", b_eq)
-    stata("python script _testmechs_lp_call.py")
+    stata("python script " + char(34) + "`c(sysdir_plus)'py/_testmechs_lp_call.py" + char(34))
 }
 
 // Solve QP min 0.5 x' P x + q' x s.t. l <= A x <= u via OSQP 0.6.x.
@@ -504,7 +504,7 @@ real colvector testmechs__qp_solve(real matrix P, real colvector q, real matrix 
     st_matrix("__tm_qp_l", l)
     st_matrix("__tm_qp_u", u)
     
-    stata("python script _testmechs_qp_call.py")
+    stata("python script " + char(34) + "`c(sysdir_plus)'py/_testmechs_qp_call.py" + char(34))
     
     ok = st_numscalar("__tm_qp_ok")
     if (ok != 1) _error(498, "OSQP failed to solve the QP")
