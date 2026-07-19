@@ -1,5 +1,7 @@
 capture program drop _testmechs_dqrdc2_rank
 capture program _testmechs_dqrdc2_rank, plugin
+capture program drop _testmechs_glpk_lp
+capture program _testmechs_glpk_lp, plugin
 
 program define testmechs_test_sharpnull, rclass
     // Syntax: d m1 [m2 m3 ...] y , options
@@ -508,7 +510,7 @@ void testmechs__lp_solve(real colvector c, real matrix A_eq, real colvector b_eq
     st_matrix("__tm_c",   c)
     st_matrix("__tm_Aeq", A_eq)
     st_matrix("__tm_beq", b_eq)
-    stata("python script " + char(34) + "`c(sysdir_plus)'py/_testmechs_lp_call.py" + char(34))
+    stata(`"plugin call _testmechs_glpk_lp, "__tm_c" "__tm_Aeq" "__tm_beq" "__tm_lp_fun" "__tm_lp_ok""')
 }
 
 // Solve QP min 0.5 x' P x + q' x s.t. l <= A x <= u via OSQP 0.6.x.
