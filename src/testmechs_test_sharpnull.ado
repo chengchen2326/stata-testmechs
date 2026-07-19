@@ -60,17 +60,7 @@ program define testmechs_test_sharpnull, rclass
             exit 199
         }
 
-        // Step 3: swiglpk (GLPK bindings; LP step uses the same solver as R)
-        capture python: import swiglpk
-        if (_rc) {
-            di as err "testmechs_test_sharpnull requires the Python package 'swiglpk'."
-            di as err "Install it with:  pip install swiglpk"
-            di as err "On macOS you may also need:  brew install glpk"
-            di as err "On Debian/Ubuntu:           sudo apt install libglpk-dev"
-            exit 199
-        }
-
-        // Step 4: osqp 0.6.x (used by the QP step)
+        // Step 3: osqp 0.6.x (used by the QP step)
         capture python: import osqp
         if (_rc) {
             di as err "testmechs_test_sharpnull requires the Python package 'osqp' (version 0.6.x)."

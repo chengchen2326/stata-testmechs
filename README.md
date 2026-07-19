@@ -66,29 +66,30 @@ help testmechs_lb_fracaffected
 
 ### Dependencies
 
-`testmechs_test_sharpnull` calls Python from Stata for the LP and QP subroutines that drive the Cox–Shi test. It requires:
+`testmechs_test_sharpnull` uses two bundled Stata plugins (rank computation and LP solving) and one Python call for the QP step. It requires:
 
 - **Stata 16+** with Python integration enabled (`help python`)
 - **Python 3** with the following packages:
   - `numpy`
-  - `swiglpk` — Python bindings for the GLPK linear-programming solver. R's `TestMechs` uses GLPK (via `Rglpk_solve_LP`); using GLPK in Stata as well makes the implementations faithful to each other and eliminates LP-solver-induced numerical differences.
   - `osqp` (version 0.6.x — note that 1.x is **not** compatible) for the QP step
-- **GLPK system library** (required by `swiglpk`):
-  - macOS: `brew install glpk`
-  - Debian/Ubuntu: `sudo apt install libglpk-dev`
-  - Other: see the [GLPK homepage](https://www.gnu.org/software/glpk/)
 
 Install the Python packages with:
 
 ```bash
-pip install numpy swiglpk 'osqp<1'
+pip install numpy 'osqp<1'
 ```
 
-### Plugin: `_testmechs_dqrdc2_rank.plugin`
+The LP step no longer requires Python: GLPK is statically linked into the bundled plugin `_testmechs_glpk_lp.plugin`, so users do not need `swiglpk` or the GLPK system library.
 
-`testmechs_test_sharpnull` ships with a precompiled Stata plugin that calls R's `dqrdc2` Fortran routine for computing matrix rank. This is necessary because R's `qr(M, tol)$rank` uses a 1995 modification of LINPACK's `dqrdc` written by Ross Ihaka specifically for R, with a custom column-pivoting strategy that gives different results from generic SVD-based rank on near-rank-deficient matrices. Without this plugin, the Stata p-values would differ from R for several test cases. See `src/dqrdc2_src/` for the Fortran/C sources and `build.sh` for the build script.
+### Bundled plugins
 
-The bundled plugin is built for **macOS Apple Silicon** only. On other platforms, run `src/dqrdc2_src/build.sh` after adjusting compiler flags. Linux and Windows builds are straightforward but have not been pre-shipped.
+`testmechs_test_sharpnull` ships with two precompiled Stata plugins.
+
+**`_testmechs_dqrdc2_rank.plugin`** calls R's `dqrdc2` Fortran routine for computing matrix rank. This is necessary because R's `qr(M, tol)$rank` uses a 1995 modification of LINPACK's `dqrdc` written by Ross Ihaka specifically for R, with a custom column-pivoting strategy that gives different results from generic SVD-based rank on near-rank-deficient matrices. Without this plugin, the Stata p-values would differ from R for several test cases. See `src/dqrdc2_src/` for the Fortran/C sources.
+
+**`_testmechs_glpk_lp.plugin`** solves the linear programs used by the Cox–Shi test. It statically links GLPK 5.0 (the same LP solver used by R's `Rglpk_solve_LP`), so users do not need to install GLPK or `swiglpk`. See `src/glpk_lp_src/` for the C source and `src/glpk_src/` for the bundled GLPK tarball.
+
+Both plugins are pre-shipped for **macOS Apple Silicon** only. On other platforms, first build GLPK following `src/glpk_src/README.md`, then run the appropriate `build_*.sh` script in `src/glpk_lp_src/` and `src/dqrdc2_src/`. Linux and Windows build scripts are provided but have not been verified end-to-end.
 
 ---
 
@@ -424,7 +425,7 @@ Interpretation:
 
 All Cox–Shi p-values reported above match the R benchmark to at least 7 decimal places. Achieving this agreement required two design choices:
 
-1. **GLPK as the LP solver.** Earlier versions of this package used HiGHS (via `scipy.optimize.linprog`). HiGHS gave correct test statistics but selected slightly different LP vertices in near-degenerate cases, which propagated to small differences in the constraint-binding count and therefore the chi-squared degrees of freedom. Switching to GLPK (the same solver R uses) eliminates this source of disagreement.
+1. **GLPK as the LP solver.** Earlier versions of this package used HiGHS (via `scipy.optimize.linprog`). HiGHS gave correct test statistics but selected slightly different LP vertices in near-degenerate cases, which propagated to small differences in the constraint-binding count and therefore the chi-squared degrees of freedom. Switching to GLPK (the same solver R uses) eliminates this source of disagreement. GLPK is now embedded directly in the bundled plugin `_testmechs_glpk_lp.plugin` — no `swiglpk` or system GLPK required.
 
 2. **R's `dqrdc2` for rank computation.** R's `qr(M, tol)$rank` uses `dqrdc2.f` — a 1995 modification by Ross Ihaka of LINPACK's `dqrdc`, available only in R's source tree. It applies a custom column-pivoting strategy that diverges from generic SVD-based or LAPACK QR rank computations on near-rank-deficient matrices. The difference is rare but consequential: for the `relationship_husb` test, SVD-based rank gave dof = 5 where `dqrdc2` gives dof = 4, leading to p-values of 0.0546 vs 0.0284. We therefore ship a precompiled Stata plugin (`src/_testmechs_dqrdc2_rank.plugin`) that calls `dqrdc2` directly from Mata, matching R's rank exactly.
 
