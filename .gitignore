@@ -18,3 +18,13 @@ src/dqrdc2_src/*.o
 
 # Temp diagnostic outputs
 /tmp/stata_*.csv
+
+# GLPK build artifacts (source tree extracted from tarball)
+src/glpk_src/glpk-5.0/
+
+# GLPK plugin build intermediates
+src/glpk_lp_src/*.o
+
+# LP diagnostic dumps
+/tmp/tm_lp_verify/
+/tmp/tm_lp_test/
