@@ -91,7 +91,8 @@ jobs:
             -o ../_testmechs_glpk_lp_win64.plugin \
             testmechs_glpk_lp.c stplugin.c \
             /tmp/glpk-5.0/src/.libs/libglpk.a \
-            -lm -static-libgcc
+            -lm -static-libgcc \
+            -Wl,--defsym=gmtime_r=gmtime -Wl,--defsym=strerror_r=strerror
           ls -la ../_testmechs_glpk_lp_win64.plugin
 
       # -----------------------------------------------------------------
