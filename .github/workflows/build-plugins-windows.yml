@@ -48,7 +48,7 @@ jobs:
           git reset --hard v0.6.3
           git submodule update --init --recursive
           mkdir build && cd build
-          cmake -G "MinGW Makefiles" -DBUILD_SHARED_LIBS=OFF ..
+          cmake -G "MinGW Makefiles" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=OFF ..
           mingw32-make -j$(nproc)
           ls -la out/libosqp.a
 
