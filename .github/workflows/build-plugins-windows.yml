@@ -1,0 +1,125 @@
+name: Build plugins (Windows)
+
+# Trigger on push to any branch, or manually
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows x86_64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. Checkout repo
+      # -----------------------------------------------------------------
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 2. Set up MSYS2 with MinGW-w64 toolchain
+      # -----------------------------------------------------------------
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-make
+            git
+            tar
+
+      # -----------------------------------------------------------------
+      # 3. Build libosqp.a for Windows x86_64
+      # -----------------------------------------------------------------
+      - name: Clone and build OSQP static library
+        run: |
+          cd /tmp
+          git clone --recursive https://github.com/osqp/osqp
+          cd osqp
+          git reset --hard v0.6.3
+          git submodule update --init --recursive
+          mkdir build && cd build
+          cmake -G "MinGW Makefiles" -DBUILD_SHARED_LIBS=OFF ..
+          mingw32-make -j$(nproc)
+          ls -la out/libosqp.a
+
+      # -----------------------------------------------------------------
+      # 4. Build libglpk.a for Windows x86_64
+      # -----------------------------------------------------------------
+      - name: Extract and build GLPK static library
+        run: |
+          cd /tmp
+          cp "$GITHUB_WORKSPACE/src/glpk_src/glpk-5.0.tar.gz" .
+          tar -xzf glpk-5.0.tar.gz
+          cd glpk-5.0
+          ./configure --disable-shared --enable-static --without-gmp --disable-dl
+          make -j$(nproc)
+          ls -la src/.libs/libglpk.a
+
+      # -----------------------------------------------------------------
+      # 5. Compile OSQP plugin for Windows x86_64
+      # -----------------------------------------------------------------
+      - name: Compile OSQP plugin
+        run: |
+          cd "$GITHUB_WORKSPACE/src/osqp_qp_src"
+          gcc -Wall -O3 -shared -DSYSTEM=STWIN32 \
+            -I/tmp/osqp/include \
+            -o ../_honestosqp_win64.plugin \
+            honestosqp.c stplugin.c \
+            /tmp/osqp/build/out/libosqp.a \
+            -static-libgcc -static-libstdc++
+          ls -la ../_honestosqp_win64.plugin
+
+      # -----------------------------------------------------------------
+      # 6. Compile GLPK plugin for Windows x86_64
+      # -----------------------------------------------------------------
+      - name: Compile GLPK plugin
+        run: |
+          cd "$GITHUB_WORKSPACE/src/glpk_lp_src"
+          gcc -shared -DSYSTEM=STWIN32 \
+            -I/tmp/glpk-5.0/src \
+            -o ../_testmechs_glpk_lp_win64.plugin \
+            testmechs_glpk_lp.c stplugin.c \
+            /tmp/glpk-5.0/src/.libs/libglpk.a \
+            -lm -static-libgcc
+          ls -la ../_testmechs_glpk_lp_win64.plugin
+
+      # -----------------------------------------------------------------
+      # 7. Compile dqrdc2 plugin for Windows x86_64
+      # -----------------------------------------------------------------
+      - name: Compile dqrdc2 plugin
+        run: |
+          cd "$GITHUB_WORKSPACE/src/dqrdc2_src"
+          gfortran -c -O2 dqrdc2.f       -o dqrdc2.o
+          gfortran -c -O2 dnrm2.f        -o dnrm2.o
+          gfortran -c -O2 blas.f         -o blas.o
+          gfortran -c -O2 xerbla_stub.f  -o xerbla_stub.o
+          gcc -shared -DSYSTEM=STWIN32 \
+            -o ../_testmechs_dqrdc2_rank_win64.plugin \
+            testmechs_dqrdc2_rank.c stplugin.c \
+            dqrdc2.o dnrm2.o blas.o xerbla_stub.o \
+            -lgfortran -static-libgcc -static-libgfortran
+          rm -f dqrdc2.o dnrm2.o blas.o xerbla_stub.o
+          ls -la ../_testmechs_dqrdc2_rank_win64.plugin
+
+      # -----------------------------------------------------------------
+      # 8. Upload plugins as artifacts
+      # -----------------------------------------------------------------
+      - name: Upload Windows plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: win64-plugins
+          path: |
+            src/_honestosqp_win64.plugin
+            src/_testmechs_glpk_lp_win64.plugin
+            src/_testmechs_dqrdc2_rank_win64.plugin
+          retention-days: 30
