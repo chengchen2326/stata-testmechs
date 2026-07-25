@@ -63,7 +63,7 @@ jobs:
           tar -xzf glpk-5.0.tar.gz
           cd glpk-5.0
           CFLAGS="-std=gnu11 -Wno-implicit-function-declaration" ./configure --disable-shared --enable-static --without-gmp --disable-dl
-          make -j$(nproc)
+          make -C src libglpk.la -j$(nproc)
           ls -la src/.libs/libglpk.a
 
       # -----------------------------------------------------------------
