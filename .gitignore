@@ -28,3 +28,9 @@ src/glpk_lp_src/*.o
 # LP diagnostic dumps
 /tmp/tm_lp_verify/
 /tmp/tm_lp_test/
+
+# OSQP library source (78 MB, clone via osqp_qp_src/README.md instructions)
+src/osqp_src/
+
+# OSQP plugin build intermediates
+src/osqp_qp_src/*.o
