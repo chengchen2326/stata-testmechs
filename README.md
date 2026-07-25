@@ -82,7 +82,7 @@ That's it — no Python installation, no external solver libraries. Rank computa
 
 **`honestosqp_plugin.plugin`** solves the quadratic program used by the Cox–Shi test. It statically links OSQP 0.6.3. The plugin is a light modification of Mauricio Cáceres Bravo's OSQP plugin from HonestDiD, extended to expose the `eps_abs` and `eps_rel` convergence tolerances so we can set them to 1e-8 (to match R's TestMechs) instead of HonestDiD's default 1e-5. See `src/osqp_qp_src/` for the C source and modification details.
 
-All three plugins are pre-shipped for **macOS Apple Silicon** only. On other platforms, first build the corresponding external library (GLPK from `src/glpk_src/`, OSQP by following `src/osqp_qp_src/README.md`), then run the appropriate `build_*.sh` script in `src/dqrdc2_src/`, `src/glpk_lp_src/`, and `src/osqp_qp_src/`. Linux, Windows, and macOS Intel build scripts exist for the dqrdc2 and GLPK plugins but have not been verified end-to-end; equivalent scripts for the OSQP plugin will follow.
+All three plugins are pre-shipped for **macOS Apple Silicon** and **macOS Intel (x86_64)**. Linux and Windows users must first build the corresponding external library (GLPK from `src/glpk_src/`, OSQP by following `src/osqp_qp_src/README.md`), then run the appropriate `build_*.sh` script in `src/dqrdc2_src/`, `src/glpk_lp_src/`, and `src/osqp_qp_src/`. Build scripts for Linux and Windows are provided but have not been verified end-to-end.
 
 ---
 

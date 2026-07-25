@@ -8,8 +8,9 @@ d testmechs_test_sharpnull (Cox-Shi sharp null test) now ships three bundled Sta
 d plugins for its numerical work: dqrdc2 for rank computation, GLPK for LP, and
 d OSQP for QP. No Python installation is required.
 d
-d Precompiled plugins currently ship for macOS Apple Silicon only. Other platforms
-d must rebuild from src/dqrdc2_src/, src/glpk_lp_src/, and src/osqp_qp_src/.
+d Precompiled plugins currently ship for macOS Apple Silicon and macOS Intel.
+d Linux and Windows users must rebuild from src/dqrdc2_src/, src/glpk_lp_src/,
+d and src/osqp_qp_src/ using the provided build scripts.
 d
 f src/testmechs_lb_fracaffected.ado
 f src/testmechs_lb_fracaffected.sthlp
@@ -17,7 +18,13 @@ f src/testmechs_test_sharpnull.ado
 f src/testmechs_test_sharpnull.sthlp
 G MACARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
 G OSX.ARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
+G MACINTEL64 src/_testmechs_dqrdc2_rank_macintel64.plugin _testmechs_dqrdc2_rank.plugin
+G OSX.X86_64 src/_testmechs_dqrdc2_rank_macintel64.plugin _testmechs_dqrdc2_rank.plugin
 G MACARM64 src/_testmechs_glpk_lp_macarm64.plugin _testmechs_glpk_lp.plugin
 G OSX.ARM64 src/_testmechs_glpk_lp_macarm64.plugin _testmechs_glpk_lp.plugin
+G MACINTEL64 src/_testmechs_glpk_lp_macintel64.plugin _testmechs_glpk_lp.plugin
+G OSX.X86_64 src/_testmechs_glpk_lp_macintel64.plugin _testmechs_glpk_lp.plugin
 G MACARM64 src/_honestosqp_macarm64.plugin honestosqp_plugin.plugin
 G OSX.ARM64 src/_honestosqp_macarm64.plugin honestosqp_plugin.plugin
+G MACINTEL64 src/_honestosqp_macintel64.plugin honestosqp_plugin.plugin
+G OSX.X86_64 src/_honestosqp_macintel64.plugin honestosqp_plugin.plugin
