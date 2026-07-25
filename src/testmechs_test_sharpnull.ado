@@ -40,36 +40,6 @@ program define testmechs_test_sharpnull, rclass
     // x86_64. If a plugin call fails at runtime (e.g. because a user is on an
     // unsupported platform), Stata will surface the failure directly.
 
-	// Python availability check (only needed when newdofcs is NOT specified)
-    // Checks each dependency independently and gives a specific install hint.
-    if ("`newdofcs'" == "") {
-        // Step 1: Stata's Python integration must be configured
-        capture python query
-        if (_rc) {
-            di as err "testmechs_test_sharpnull requires Stata 16+ with Python integration."
-            di as err "Configure Python in Stata with:  python set exec /path/to/python3"
-            di as err "See {help python} for details."
-            exit 199
-        }
-
-        // Step 2: numpy (used by both the LP and QP wrappers)
-        capture python: import numpy
-        if (_rc) {
-            di as err "testmechs_test_sharpnull requires the Python package 'numpy'."
-            di as err "Install it with:  pip install numpy"
-            exit 199
-        }
-
-        // Step 3: osqp 0.6.x (used by the QP step)
-        capture python: import osqp
-        if (_rc) {
-            di as err "testmechs_test_sharpnull requires the Python package 'osqp' (version 0.6.x)."
-            di as err "Install it with:  pip install 'osqp<1'"
-            di as err "(osqp version 1.x is NOT compatible)"
-            exit 199
-        }
-    }
-
     marksample touse
 
     // Parse varlist: first word = d, last word = y, middle word(s) = mediators
@@ -657,9 +627,8 @@ real colvector testmechs__rank_revealing_pivot(real matrix M, real scalar tol,
     return(pivot)
 }
 
-// Solve min c'x s.t. A_eq x = b_eq, x >= 0  via scipy.optimize.linprog (HiGHS).
-// Pushes data through Stata matrices, calls the `_testmechs_lp_call` ado
-// subroutine (which runs a python: block), then reads scalars back.
+// Solve min c.x s.t. A_eq x = b_eq, x >= 0  via GLPK plugin.
+// Pushes data through Stata matrices, calls _testmechs_glpk_lp plugin.
 // Result objective -> Stata scalar __tm_lp_fun; success flag -> __tm_lp_ok.
 void testmechs__lp_solve(real colvector c, real matrix A_eq, real colvector b_eq)
 {
@@ -1017,23 +986,3 @@ end
 // Ado subroutine called by testmechs__lp_solve() via stata("_testmechs_lp_call").
 // Reads Stata matrices __tm_c, __tm_Aeq, __tm_beq, runs scipy.optimize.linprog
 // (HiGHS), and writes Stata scalars __tm_lp_fun and __tm_lp_ok.
-// -----------------------------------------------------------------------------
-program define _testmechs_lp_call
-    version 16.0
-    python:
-from sfi import Matrix, Scalar
-import numpy as np
-from scipy.optimize import linprog
-
-_c   = np.asarray(Matrix.get("__tm_c"),   dtype=float).flatten()
-_Aeq = np.asarray(Matrix.get("__tm_Aeq"), dtype=float)
-_beq = np.asarray(Matrix.get("__tm_beq"), dtype=float).flatten()
-if _Aeq.ndim == 1:
-    _Aeq = _Aeq.reshape(1, -1)
-
-_bounds = [(0, None)] * _c.size
-_res = linprog(c=_c, A_eq=_Aeq, b_eq=_beq, bounds=_bounds, method="highs")
-
-Scalar.setValue("__tm_lp_fun", float(_res.fun) if _res.fun is not None else float("nan"))
-Scalar.setValue("__tm_lp_ok",  1.0 if _res.success else 0.0)
-end
