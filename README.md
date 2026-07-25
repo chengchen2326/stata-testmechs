@@ -66,30 +66,23 @@ help testmechs_lb_fracaffected
 
 ### Dependencies
 
-`testmechs_test_sharpnull` uses two bundled Stata plugins (rank computation and LP solving) and one Python call for the QP step. It requires:
+`testmechs_test_sharpnull` uses three bundled Stata plugins for all its numerical work. It requires:
 
-- **Stata 16+** with Python integration enabled (`help python`)
-- **Python 3** with the following packages:
-  - `numpy`
-  - `osqp` (version 0.6.x — note that 1.x is **not** compatible) for the QP step
+- **Stata 16+**
 
-Install the Python packages with:
-
-```bash
-pip install numpy 'osqp<1'
-```
-
-The LP step no longer requires Python: GLPK is statically linked into the bundled plugin `_testmechs_glpk_lp.plugin`, so users do not need `swiglpk` or the GLPK system library.
+That's it — no Python installation, no external solver libraries. Rank computation (via `dqrdc2`), the linear programs (via GLPK 5.0), and the quadratic program (via OSQP 0.6.3) all run inside statically-linked Stata plugins.
 
 ### Bundled plugins
 
-`testmechs_test_sharpnull` ships with two precompiled Stata plugins.
+`testmechs_test_sharpnull` ships with three precompiled Stata plugins.
 
 **`_testmechs_dqrdc2_rank.plugin`** calls R's `dqrdc2` Fortran routine for computing matrix rank. This is necessary because R's `qr(M, tol)$rank` uses a 1995 modification of LINPACK's `dqrdc` written by Ross Ihaka specifically for R, with a custom column-pivoting strategy that gives different results from generic SVD-based rank on near-rank-deficient matrices. Without this plugin, the Stata p-values would differ from R for several test cases. See `src/dqrdc2_src/` for the Fortran/C sources.
 
 **`_testmechs_glpk_lp.plugin`** solves the linear programs used by the Cox–Shi test. It statically links GLPK 5.0 (the same LP solver used by R's `Rglpk_solve_LP`), so users do not need to install GLPK or `swiglpk`. See `src/glpk_lp_src/` for the C source and `src/glpk_src/` for the bundled GLPK tarball.
 
-Both plugins are pre-shipped for **macOS Apple Silicon** only. On other platforms, first build GLPK following `src/glpk_src/README.md`, then run the appropriate `build_*.sh` script in `src/glpk_lp_src/` and `src/dqrdc2_src/`. Linux and Windows build scripts are provided but have not been verified end-to-end.
+**`honestosqp_plugin.plugin`** solves the quadratic program used by the Cox–Shi test. It statically links OSQP 0.6.3. The plugin is a light modification of Mauricio Cáceres Bravo's OSQP plugin from HonestDiD, extended to expose the `eps_abs` and `eps_rel` convergence tolerances so we can set them to 1e-8 (to match R's TestMechs) instead of HonestDiD's default 1e-5. See `src/osqp_qp_src/` for the C source and modification details.
+
+All three plugins are pre-shipped for **macOS Apple Silicon** only. On other platforms, first build the corresponding external library (GLPK from `src/glpk_src/`, OSQP by following `src/osqp_qp_src/README.md`), then run the appropriate `build_*.sh` script in `src/dqrdc2_src/`, `src/glpk_lp_src/`, and `src/osqp_qp_src/`. Linux, Windows, and macOS Intel build scripts exist for the dqrdc2 and GLPK plugins but have not been verified end-to-end; equivalent scripts for the OSQP plugin will follow.
 
 ---
 

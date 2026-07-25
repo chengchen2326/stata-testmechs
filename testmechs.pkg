@@ -1,14 +1,15 @@
-v 0.0.4
+v 0.0.5
 d TestMechs (MVP): Stata translation of Jon Roth & Soonwoo Kwon's TestMechs R package.
 d
 d Installation:
 d   net install testmechs, from("https://raw.githubusercontent.com/chengchen2326/stata-testmechs/main") replace
 d
-d testmechs_test_sharpnull (Cox-Shi sharp null test) requires:
-d   - Python 3 with packages: numpy, osqp (version 0.6.x)
-d     (LP is now solved by the bundled GLPK plugin; only QP still uses Python.)
-d   - Precompiled plugins ship for macOS Apple Silicon only.
-d     Other platforms must rebuild from src/dqrdc2_src/ and src/glpk_lp_src/.
+d testmechs_test_sharpnull (Cox-Shi sharp null test) now ships three bundled Stata
+d plugins for its numerical work: dqrdc2 for rank computation, GLPK for LP, and
+d OSQP for QP. No Python installation is required.
+d
+d Precompiled plugins currently ship for macOS Apple Silicon only. Other platforms
+d must rebuild from src/dqrdc2_src/, src/glpk_lp_src/, and src/osqp_qp_src/.
 d
 f src/testmechs_lb_fracaffected.ado
 f src/testmechs_lb_fracaffected.sthlp
@@ -18,4 +19,5 @@ G MACARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plu
 G OSX.ARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
 G MACARM64 src/_testmechs_glpk_lp_macarm64.plugin _testmechs_glpk_lp.plugin
 G OSX.ARM64 src/_testmechs_glpk_lp_macarm64.plugin _testmechs_glpk_lp.plugin
-F _testmechs_qp_call.py
+G MACARM64 src/_honestosqp_macarm64.plugin honestosqp_plugin.plugin
+G OSX.ARM64 src/_honestosqp_macarm64.plugin honestosqp_plugin.plugin
