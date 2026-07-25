@@ -62,7 +62,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/src/glpk_src/glpk-5.0.tar.gz" .
           tar -xzf glpk-5.0.tar.gz
           cd glpk-5.0
-          CFLAGS="-std=gnu11" ./configure --disable-shared --enable-static --without-gmp --disable-dl
+          CFLAGS="-std=gnu11 -Wno-implicit-function-declaration" ./configure --disable-shared --enable-static --without-gmp --disable-dl
           make -j$(nproc)
           ls -la src/.libs/libglpk.a
 
