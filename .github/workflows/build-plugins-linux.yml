@@ -1,0 +1,118 @@
+name: Build plugins (Linux)
+
+# Trigger on push to any branch, or manually
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. Checkout repo
+      # -----------------------------------------------------------------
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 2. Install build tools
+      # -----------------------------------------------------------------
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gfortran \
+            cmake \
+            git \
+            ca-certificates
+
+      # -----------------------------------------------------------------
+      # 3. Build libosqp.a for Linux x86_64
+      # -----------------------------------------------------------------
+      - name: Clone and build OSQP static library
+        run: |
+          cd /tmp
+          git clone --recursive https://github.com/osqp/osqp
+          cd osqp
+          git reset --hard v0.6.3
+          git submodule update --init --recursive
+          mkdir build && cd build
+          cmake -DBUILD_SHARED_LIBS=OFF ..
+          make -j$(nproc)
+          ls -la out/libosqp.a
+
+      # -----------------------------------------------------------------
+      # 4. Build libglpk.a for Linux x86_64
+      # -----------------------------------------------------------------
+      - name: Extract and build GLPK static library
+        run: |
+          cd /tmp
+          cp $GITHUB_WORKSPACE/src/glpk_src/glpk-5.0.tar.gz .
+          tar -xzf glpk-5.0.tar.gz
+          cd glpk-5.0
+          ./configure --disable-shared --enable-static --without-gmp --disable-dl
+          make -j$(nproc)
+          ls -la src/.libs/libglpk.a
+
+      # -----------------------------------------------------------------
+      # 5. Compile OSQP plugin (honestosqp) for Linux x86_64
+      # -----------------------------------------------------------------
+      - name: Compile OSQP plugin
+        run: |
+          cd $GITHUB_WORKSPACE/src/osqp_qp_src
+          gcc -Wall -O3 -shared -fPIC -DSYSTEM=OPUNIX \
+            -I/tmp/osqp/include \
+            -o ../_honestosqp_linux64.plugin \
+            honestosqp.c stplugin.c \
+            /tmp/osqp/build/out/libosqp.a
+          ls -la ../_honestosqp_linux64.plugin
+
+      # -----------------------------------------------------------------
+      # 6. Compile GLPK plugin for Linux x86_64
+      # -----------------------------------------------------------------
+      - name: Compile GLPK plugin
+        run: |
+          cd $GITHUB_WORKSPACE/src/glpk_lp_src
+          gcc -shared -fPIC -DSYSTEM=OPUNIX \
+            -I/tmp/glpk-5.0/src \
+            -o ../_testmechs_glpk_lp_linux64.plugin \
+            testmechs_glpk_lp.c stplugin.c \
+            /tmp/glpk-5.0/src/.libs/libglpk.a \
+            -lm
+          ls -la ../_testmechs_glpk_lp_linux64.plugin
+
+      # -----------------------------------------------------------------
+      # 7. Compile dqrdc2 plugin for Linux x86_64
+      # -----------------------------------------------------------------
+      - name: Compile dqrdc2 plugin
+        run: |
+          cd $GITHUB_WORKSPACE/src/dqrdc2_src
+          gfortran -c -O2 dqrdc2.f       -o dqrdc2.o
+          gfortran -c -O2 dnrm2.f        -o dnrm2.o
+          gfortran -c -O2 blas.f         -o blas.o
+          gfortran -c -O2 xerbla_stub.f  -o xerbla_stub.o
+          gcc -shared -fPIC -DSYSTEM=OPUNIX \
+            -o ../_testmechs_dqrdc2_rank_linux64.plugin \
+            testmechs_dqrdc2_rank.c stplugin.c \
+            dqrdc2.o dnrm2.o blas.o xerbla_stub.o \
+            -lgfortran
+          rm -f dqrdc2.o dnrm2.o blas.o xerbla_stub.o
+          ls -la ../_testmechs_dqrdc2_rank_linux64.plugin
+
+      # -----------------------------------------------------------------
+      # 8. Upload plugins as artifacts (downloadable from GitHub UI)
+      # -----------------------------------------------------------------
+      - name: Upload Linux plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux64-plugins
+          path: |
+            src/_honestosqp_linux64.plugin
+            src/_testmechs_glpk_lp_linux64.plugin
+            src/_testmechs_dqrdc2_rank_linux64.plugin
+          retention-days: 30
