@@ -1,4 +1,4 @@
-v 0.0.6
+v 0.0.7
 d TestMechs (MVP): Stata translation of Jon Roth & Soonwoo Kwon's TestMechs R package.
 d
 d Installation:
@@ -8,9 +8,8 @@ d testmechs_test_sharpnull (Cox-Shi sharp null test) now ships three bundled Sta
 d plugins for its numerical work: dqrdc2 for rank computation, GLPK for LP, and
 d OSQP for QP. No Python installation is required.
 d
-d Precompiled plugins currently ship for macOS Apple Silicon, macOS Intel, and
-d Linux x86_64. Windows users must rebuild from src/dqrdc2_src/, src/glpk_lp_src/,
-d and src/osqp_qp_src/ using the provided build scripts.
+d Precompiled plugins ship for macOS Apple Silicon, macOS Intel, Linux x86_64,
+d and Windows x86_64.
 d
 f src/testmechs_lb_fracaffected.ado
 f src/testmechs_lb_fracaffected.sthlp
@@ -22,15 +21,21 @@ G MACINTEL64 src/_testmechs_dqrdc2_rank_macintel64.plugin _testmechs_dqrdc2_rank
 G OSX.X86_64 src/_testmechs_dqrdc2_rank_macintel64.plugin _testmechs_dqrdc2_rank.plugin
 G LINUX64 src/_testmechs_dqrdc2_rank_linux64.plugin _testmechs_dqrdc2_rank.plugin
 G LINUX src/_testmechs_dqrdc2_rank_linux64.plugin _testmechs_dqrdc2_rank.plugin
+G WIN64 src/_testmechs_dqrdc2_rank_win64.plugin _testmechs_dqrdc2_rank.plugin
+G WINDOWS src/_testmechs_dqrdc2_rank_win64.plugin _testmechs_dqrdc2_rank.plugin
 G MACARM64 src/_testmechs_glpk_lp_macarm64.plugin _testmechs_glpk_lp.plugin
 G OSX.ARM64 src/_testmechs_glpk_lp_macarm64.plugin _testmechs_glpk_lp.plugin
 G MACINTEL64 src/_testmechs_glpk_lp_macintel64.plugin _testmechs_glpk_lp.plugin
 G OSX.X86_64 src/_testmechs_glpk_lp_macintel64.plugin _testmechs_glpk_lp.plugin
 G LINUX64 src/_testmechs_glpk_lp_linux64.plugin _testmechs_glpk_lp.plugin
 G LINUX src/_testmechs_glpk_lp_linux64.plugin _testmechs_glpk_lp.plugin
+G WIN64 src/_testmechs_glpk_lp_win64.plugin _testmechs_glpk_lp.plugin
+G WINDOWS src/_testmechs_glpk_lp_win64.plugin _testmechs_glpk_lp.plugin
 G MACARM64 src/_honestosqp_macarm64.plugin honestosqp_plugin.plugin
 G OSX.ARM64 src/_honestosqp_macarm64.plugin honestosqp_plugin.plugin
 G MACINTEL64 src/_honestosqp_macintel64.plugin honestosqp_plugin.plugin
 G OSX.X86_64 src/_honestosqp_macintel64.plugin honestosqp_plugin.plugin
 G LINUX64 src/_honestosqp_linux64.plugin honestosqp_plugin.plugin
 G LINUX src/_honestosqp_linux64.plugin honestosqp_plugin.plugin
+G WIN64 src/_honestosqp_win64.plugin honestosqp_plugin.plugin
+G WINDOWS src/_honestosqp_win64.plugin honestosqp_plugin.plugin
