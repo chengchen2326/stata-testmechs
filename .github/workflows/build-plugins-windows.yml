@@ -109,7 +109,7 @@ jobs:
             -o ../_testmechs_dqrdc2_rank_win64.plugin \
             testmechs_dqrdc2_rank.c stplugin.c \
             dqrdc2.o dnrm2.o blas.o xerbla_stub.o \
-            -static-libgcc -static-libgfortran -Wl,-Bstatic -lgfortran -lquadmath -Wl,-Bdynamic
+            -static-libgcc -static-libgfortran -Wl,-Bstatic -lgfortran -lquadmath -lwinpthread -Wl,-Bdynamic
           rm -f dqrdc2.o dnrm2.o blas.o xerbla_stub.o
           ls -la ../_testmechs_dqrdc2_rank_win64.plugin
 
