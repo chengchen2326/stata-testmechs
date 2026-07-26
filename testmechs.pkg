@@ -1,4 +1,4 @@
-v 0.0.7
+v 0.0.8
 d TestMechs (MVP): Stata translation of Jon Roth & Soonwoo Kwon's TestMechs R package.
 d
 d Installation:
@@ -15,6 +15,7 @@ f src/testmechs_lb_fracaffected.ado
 f src/testmechs_lb_fracaffected.sthlp
 f src/testmechs_test_sharpnull.ado
 f src/testmechs_test_sharpnull.sthlp
+f data/mother_data.dta
 G MACARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
 G OSX.ARM64 src/_testmechs_dqrdc2_rank_macarm64.plugin _testmechs_dqrdc2_rank.plugin
 G MACINTEL64 src/_testmechs_dqrdc2_rank_macintel64.plugin _testmechs_dqrdc2_rank.plugin
