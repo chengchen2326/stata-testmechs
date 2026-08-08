@@ -1,7 +1,7 @@
 program define testmechs_lb_fracaffected, rclass
     version 16.0
 
-    syntax varlist(min=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string) allowmindefiers]
+    syntax varlist(min=3 numeric) [if] [in] [, atgroup(string) numybins(string) maxdefiersshare(string) allowmindefiers reg_formula(string)]
 
     if ("`numybins'" == "") local numybins 5
     if ("`maxdefiersshare'" == "") local maxdefiersshare 0
@@ -84,6 +84,19 @@ else {
     quietly summarize `wt' if `touse2' & `d' == 0, meanonly
     scalar W0 = r(sum)
 
+    * Full set of y bin values (needed when reg_formula iterates over all (y,m))
+    quietly levelsof `ywork' if `touse2', local(yfulllevels)
+
+    * Guard: reg_formula only sensible with discrete y
+    if "`reg_formula'" != "" {
+        local Ky : word count `yfulllevels'
+        if `Ky' > `numybins' + 5 {
+            di as err "reg_formula requires y to be discrete (currently `Ky' distinct values)."
+            di as err "Set numybins() to discretize y first."
+            exit 198
+        }
+    }
+
     tempname p1 p0 maxdiff
     matrix `p1' = J(`K',1,0)
     matrix `p0' = J(`K',1,0)
@@ -97,16 +110,37 @@ else {
         quietly summarize `wt' if `touse2' & `d' == 0 & `mgroup' == `mv', meanonly
         matrix `p0'[`k',1] = r(sum) / W0
 
-        quietly levelsof `ywork' if `touse2' & `mgroup' == `mv', local(yvals)
-        scalar thisdiff = 0
-        foreach yv of local yvals {
-            quietly summarize `wt' if `touse2' & `d' == 1 & `mgroup' == `mv' & `ywork' == `yv', meanonly
-            scalar p1y = r(sum) / W1
-            quietly summarize `wt' if `touse2' & `d' == 0 & `mgroup' == `mv' & `ywork' == `yv', meanonly
-            scalar p0y = r(sum) / W0
-            scalar thisdiff = thisdiff + max(p1y - p0y, 0)
+        if "`reg_formula'" == "" {
+            quietly levelsof `ywork' if `touse2' & `mgroup' == `mv', local(yvals)
+            scalar thisdiff = 0
+            foreach yv of local yvals {
+                quietly summarize `wt' if `touse2' & `d' == 1 & `mgroup' == `mv' & `ywork' == `yv', meanonly
+                scalar p1y = r(sum) / W1
+                quietly summarize `wt' if `touse2' & `d' == 0 & `mgroup' == `mv' & `ywork' == `yv', meanonly
+                scalar p0y = r(sum) / W0
+                scalar thisdiff = thisdiff + max(p1y - p0y, 0)
+            }
+            matrix `maxdiff'[`k',1] = thisdiff
         }
-        matrix `maxdiff'[`k',1] = thisdiff
+        else {
+            * Regression branch: iterate over the FULL set of y values
+            * (not just those observed at this m), because a regression
+            * can produce a nonzero coefficient for an unobserved (y,m).
+            * Strip the leading "~" if user included it.
+            local reg_rhs = strtrim("`reg_formula'")
+            if substr("`reg_rhs'", 1, 1) == "~" {
+                local reg_rhs = strtrim(substr("`reg_rhs'", 2, .))
+            }
+            scalar thisdiff = 0
+            foreach yv of local yfulllevels {
+                testmechs__reg_prob, y_val(`yv') m_val(`mv') ywork(`ywork') mgroup(`mgroup') dvar(`d') touse2(`touse2') trans(treated) rhs("`reg_rhs'")
+                scalar p1y = r(p)
+                testmechs__reg_prob, y_val(`yv') m_val(`mv') ywork(`ywork') mgroup(`mgroup') dvar(`d') touse2(`touse2') trans(control) rhs("`reg_rhs'")
+                scalar p0y = r(p)
+                scalar thisdiff = thisdiff + max(p1y - p0y, 0)
+            }
+            matrix `maxdiff'[`k',1] = thisdiff
+        }
     }
 
     local atindex 0
@@ -304,4 +338,80 @@ else {
 
     di as txt "testmechs_lb_fracaffected"
     di as res "  lower bound = " %9.6f `lb'
+end
+
+
+*==============================================================
+* testmechs__reg_prob: helper used by the reg_formula branch.
+* For a single (y_val, m_val) cell, run a regression under one of
+* R's control_transform / treated_transform and return the
+* coefficient on the treatment variable in r(p).
+*
+* Mirrors R's compute_regression_probs() (test_sharp_null.R).
+*==============================================================
+program define testmechs__reg_prob, rclass
+    version 16.0
+    syntax , y_val(real) m_val(real) ywork(varname) mgroup(varname) dvar(varname) touse2(varname) trans(string) rhs(string)
+
+    tempvar lhs
+    quietly gen double `lhs' = (`ywork' == `y_val' & `mgroup' == `m_val') if `touse2'
+
+    if "`trans'" == "treated" {
+        quietly replace `lhs' = `dvar' * `lhs' if `touse2'
+    }
+    else if "`trans'" == "control" {
+        quietly replace `lhs' = (`dvar' - 1) * `lhs' if `touse2'
+    }
+    else {
+        di as err "trans must be 'treated' or 'control'"
+        exit 198
+    }
+
+    * Guard: if lhs is constant, regression fails; return 0
+    quietly summarize `lhs' if `touse2'
+    if r(sd) == 0 {
+        return scalar p = 0
+        exit
+    }
+
+    * Detect IV syntax: does rhs contain "(<var> = <var>)"?
+    local iv_pattern 0
+    if regexm("`rhs'", "\((.+)=(.+)\)") local iv_pattern 1
+
+    if `iv_pattern' {
+        local endog = strtrim(regexs(1))
+        local instr = strtrim(regexs(2))
+
+        * Remove the IV portion from rhs to get controls
+        local controls : subinstr local rhs "(`endog' = `instr')" "", all
+        local controls : subinstr local controls "(`endog'= `instr')" "", all
+        local controls : subinstr local controls "(`endog' =`instr')" "", all
+        local controls : subinstr local controls "(`endog'=`instr')" "", all
+
+        * Strip "+" and collapse whitespace
+        local controls : subinstr local controls "+" " ", all
+        local controls = strtrim(stritrim("`controls'"))
+
+        * Try IV first; on r(481) collinearity (e.g. perfect instrument),
+        * fall back to OLS — R's fixest silently produces this result.
+        capture quietly ivregress 2sls `lhs' `controls' (`endog' = `instr') if `touse2'
+        if _rc == 481 {
+            quietly regress `lhs' `endog' `controls' if `touse2'
+            return scalar p = _b[`endog']
+        }
+        else if _rc == 0 {
+            return scalar p = _b[`endog']
+        }
+        else {
+            ivregress 2sls `lhs' `controls' (`endog' = `instr') if `touse2'
+        }
+    }
+    else {
+        * Strip "+" and collapse whitespace
+        local clean_rhs : subinstr local rhs "+" " ", all
+        local clean_rhs = strtrim(stritrim("`clean_rhs'"))
+
+        quietly regress `lhs' `clean_rhs' if `touse2'
+        return scalar p = _b[`dvar']
+    }
 end
