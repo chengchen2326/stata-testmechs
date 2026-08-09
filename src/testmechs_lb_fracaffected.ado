@@ -1,3 +1,6 @@
+capture program drop _testmechs_glpk_lp
+capture program _testmechs_glpk_lp, plugin
+
 program define testmechs_lb_fracaffected, rclass
     version 16.0
 
@@ -157,180 +160,30 @@ else {
         }
     }
 
-    tempfile lpinput lpout pysrc
-	capture file close fh
-    capture file close py
-    capture file open fh using `lpinput', write text replace
-    file write fh "K `K'" _n
-    file write fh "atindex `atindex'" _n
-    file write fh "maxdef `maxdefiersshare'" _n
-    local allowmin = cond("`allowmindefiers'" != "", 1, 0)
-    file write fh "allowmin `allowmin'" _n
-    forvalues i = 1/`K' {
-        local p1i = `p1'[`i',1]
-        local p0i = `p0'[`i',1]
-        local mdi = `maxdiff'[`i',1]
-        file write fh "row `i' `p1i' `p0i' `mdi'" _n
-    }
-    file close fh
+    * ==================== GLPK-based LP solver ====================
+    * Replaces the previous Python simplex with two GLPK plugin calls.
+    * Same math: LP1 finds the min defiers share; LP2 gives the fractional
+    * lower bound. GLPK is called via testmechs_lbfrac__glpk() Mata helper.
 
-    capture file open py using `pysrc', write text replace
-    file write py "import sys" _n
-    file write py "EPS=1e-9" _n
-    file write py "INF=1e100" _n
-    file write py "class LPSolver:" _n
-    file write py "    def __init__(self,A,b,c):" _n
-    file write py "        self.m=len(b); self.n=len(c)" _n
-    file write py "        self.N=list(range(self.n))+[-1]" _n
-    file write py "        self.B=[self.n+i for i in range(self.m)]" _n
-    file write py "        self.D=[[0.0]*(self.n+2) for _ in range(self.m+2)]" _n
-    file write py "        for i in range(self.m):" _n
-    file write py "            for j in range(self.n): self.D[i][j]=A[i][j]" _n
-    file write py "            self.D[i][self.n]=-1.0" _n
-    file write py "            self.D[i][self.n+1]=b[i]" _n
-    file write py "        for j in range(self.n): self.D[self.m][j]=-c[j]" _n
-    file write py "        self.D[self.m+1][self.n]=1.0" _n
-    file write py "    def pivot(self,r,s):" _n
-    file write py "        D=self.D; m=self.m; n=self.n" _n
-    file write py "        inv=1.0/D[r][s]" _n
-    file write py "        for i in range(m+2):" _n
-    file write py "            if i==r: continue" _n
-    file write py "            for j in range(n+2):" _n
-    file write py "                if j==s: continue" _n
-    file write py "                D[i][j]-=D[r][j]*D[i][s]*inv" _n
-    file write py "        for j in range(n+2):" _n
-    file write py "            if j!=s: D[r][j]*=inv" _n
-    file write py "        for i in range(m+2):" _n
-    file write py "            if i!=r: D[i][s]*=-inv" _n
-    file write py "        D[r][s]=inv" _n
-    file write py "        self.B[r],self.N[s]=self.N[s],self.B[r]" _n
-    file write py "    def simplex(self,phase):" _n
-    file write py "        x=self.m+1 if phase==1 else self.m" _n
-    file write py "        while True:" _n
-    file write py "            s=-1" _n
-    file write py "            for j in range(self.n+1):" _n
-    file write py "                if phase==2 and self.N[j]==-1: continue" _n
-    file write py "                if s==-1 or self.D[x][j] < self.D[x][s]-EPS or (abs(self.D[x][j]-self.D[x][s])<=EPS and self.N[j]<self.N[s]): s=j" _n
-    file write py "            if self.D[x][s] >= -EPS: return True" _n
-    file write py "            r=-1" _n
-    file write py "            for i in range(self.m):" _n
-    file write py "                if self.D[i][s] <= EPS: continue" _n
-    file write py "                if r==-1: r=i" _n
-    file write py "                else:" _n
-    file write py "                    lhs=self.D[i][self.n+1]/self.D[i][s]" _n
-    file write py "                    rhs=self.D[r][self.n+1]/self.D[r][s]" _n
-    file write py "                    if lhs < rhs-EPS or (abs(lhs-rhs)<=EPS and self.B[i] < self.B[r]): r=i" _n
-    file write py "            if r==-1: return False" _n
-    file write py "            self.pivot(r,s)" _n
-    file write py "    def solve_max(self):" _n
-    file write py "        r=0" _n
-    file write py "        for i in range(1,self.m):" _n
-    file write py "            if self.D[i][self.n+1] < self.D[r][self.n+1]: r=i" _n
-    file write py "        if self.D[r][self.n+1] < -EPS:" _n
-    file write py "            self.pivot(r,self.n)" _n
-    file write py "            if (not self.simplex(1)) or self.D[self.m+1][self.n+1] < -EPS: return None,None,False" _n
-    file write py "            if abs(self.D[self.m+1][self.n+1]) > EPS: return None,None,False" _n
-    file write py "            rr=-1" _n
-    file write py "            for i in range(self.m):" _n
-    file write py "                if self.B[i]==-1: rr=i; break" _n
-    file write py "            if rr!=-1:" _n
-    file write py "                s=0" _n
-    file write py "                for j in range(1,self.n+1):" _n
-    file write py "                    if self.D[rr][j] < self.D[rr][s]-EPS or (abs(self.D[rr][j]-self.D[rr][s])<=EPS and self.N[j] < self.N[s]): s=j" _n
-    file write py "                self.pivot(rr,s)" _n
-    file write py "        if not self.simplex(2): return None,None,True" _n
-    file write py "        x=[0.0]*self.n" _n
-    file write py "        for i in range(self.m):" _n
-    file write py "            if self.B[i] < self.n: x[self.B[i]] = self.D[i][self.n+1]" _n
-    file write py "        return x,self.D[self.m][self.n+1],False" _n
-    file write py "def solve_min(A,b,c):" _n
-    file write py "    x,val,unb=LPSolver(A,b,[-v for v in c]).solve_max()" _n
-    file write py "    if x is None: return None,None,unb" _n
-    file write py "    return x,-val,unb" _n
-    file write py "inp,outp=sys.argv[1],sys.argv[2]" _n
-    file write py "lines=[x.strip().split() for x in open(inp) if x.strip()]" _n
-    file write py "K=int(lines[0][1]); atindex=int(lines[1][1]); maxdef=float(lines[2][1]); allowmin=int(lines[3][1])" _n
-    file write py "rows=lines[4:4+K]" _n
-    file write py "p1=[float(r[2]) for r in rows]; p0=[float(r[3]) for r in rows]; md=[float(r[4]) for r in rows]" _n
-    file write py "def idx(i,j): return i*K+j" _n
-    file write py "n=K*K" _n
-    file write py "A=[]; b=[]" _n
-    file write py "for j in range(K):" _n
-    file write py "    row=[0.0]*n" _n
-    file write py "    for i in range(K): row[idx(i,j)] = 1.0" _n
-    file write py "    A.append(row); b.append(p1[j]); A.append([-v for v in row]); b.append(-p1[j])" _n
-    file write py "for i in range(K):" _n
-    file write py "    row=[0.0]*n" _n
-    file write py "    for j in range(K): row[idx(i,j)] = 1.0" _n
-    file write py "    A.append(row); b.append(p0[i]); A.append([-v for v in row]); b.append(-p0[i])" _n
-    file write py "c=[1.0 if i>j else 0.0 for i in range(K) for j in range(K)]" _n
-    file write py "x,val,unb=solve_min(A,b,c)" _n
-    file write py "if x is None: raise RuntimeError('feasibility LP failed')" _n
-    file write py "min_def=val" _n
-    file write py "if min_def>maxdef:" _n
-    file write py "    if allowmin==1: maxdef=min_def+1e-6" _n
-    file write py "    else: raise RuntimeError('data incompatible with maxdefiersshare when allowmindefiers is off')" _n
-    file write py "groups=list(range(K)) if atindex==0 else [atindex-1]" _n
-    file write py "N=n+K+1; tix=N-1" _n
-    file write py "A=[]; b=[]" _n
-    file write py "for j in range(K):" _n
-    file write py "    row=[0.0]*N" _n
-    file write py "    for i in range(K): row[idx(i,j)] = 1.0" _n
-    file write py "    row[tix] = -p1[j]" _n
-    file write py "    A.append(row); b.append(0.0); A.append([-v for v in row]); b.append(0.0)" _n
-    file write py "for i in range(K):" _n
-    file write py "    row=[0.0]*N" _n
-    file write py "    for j in range(K): row[idx(i,j)] = 1.0" _n
-    file write py "    row[tix] = -p0[i]" _n
-    file write py "    A.append(row); b.append(0.0); A.append([-v for v in row]); b.append(0.0)" _n
-    file write py "row=[0.0]*N" _n
-    file write py "for g in groups: row[idx(g,g)] = 1.0" _n
-    file write py "A.append(row); b.append(1.0); A.append([-v for v in row]); b.append(-1.0)" _n
-    file write py "for k in range(K):" _n
-    file write py "    row=[0.0]*N" _n
-    file write py "    for i in range(K):" _n
-    file write py "        if i!=k: row[idx(i,k)] = -1.0" _n
-    file write py "    row[n+k] = -1.0" _n
-    file write py "    row[tix] = md[k]" _n
-    file write py "    A.append(row); b.append(0.0)" _n
-    file write py "row=[0.0]*N" _n
-    file write py "for i in range(K):" _n
-    file write py "    for j in range(K):" _n
-    file write py "        if i>j: row[idx(i,j)] = 1.0" _n
-    file write py "row[tix] = -maxdef" _n
-    file write py "A.append(row); b.append(0.0)" _n
-    file write py "obj=[0.0]*N" _n
-    file write py "for g in groups: obj[n+g] = 1.0" _n
-    file write py "x2,val2,unb2=solve_min(A,b,obj)" _n
-    file write py "if x2 is None: raise RuntimeError('fractional LP failed')" _n
-    file write py "with open(outp,'w') as f:" _n
-    file write py "    f.write('lb %s\n' % val2)" _n
-    file write py "    f.write('min_defier_share %s\n' % min_def)" _n
-    file write py "    f.write('maxdefiersshare_used %s\n' % maxdef)" _n
-    file close py
+    * Pack marginals and maxdiffs into row vectors readable by Mata
+    tempname pp1 pp0 mdd
+    matrix `pp1' = `p1'
+    matrix `pp0' = `p0'
+    matrix `mdd' = `maxdiff'
 
-    quietly shell python3 `pysrc' `lpinput' `lpout'
-    if _rc {
-        di as err "python-based LP solver failed"
-        exit 498
-    }
+    local allowmin_lp = cond("`allowmindefiers'" != "", 1, 0)
+
+    scalar __tm_lp_K        = `K'
+    scalar __tm_lp_atindex  = `atindex'
+    scalar __tm_lp_maxdef   = `maxdefiersshare'
+    scalar __tm_lp_allowmin = `allowmin_lp'
+
+    mata: testmechs_lbfrac__solve_lps("`pp1'", "`pp0'", "`mdd'")
 
     tempname lb min_def maxdef_used
-    scalar `lb' = .
-    scalar `min_def' = .
-    scalar `maxdef_used' = .
-
-    file open rf using `lpout', read text
-    file read rf line
-    while r(eof)==0 {
-        local key : word 1 of `line'
-        local val : word 2 of `line'
-        if "`key'" == "lb" scalar `lb' = real("`val'")
-        if "`key'" == "min_defier_share" scalar `min_def' = real("`val'")
-        if "`key'" == "maxdefiersshare_used" scalar `maxdef_used' = real("`val'")
-        file read rf line
-    }
-    file close rf
+    scalar `lb'          = scalar(__tm_lp_lb)
+    scalar `min_def'     = scalar(__tm_lp_min_def)
+    scalar `maxdef_used' = scalar(__tm_lp_maxdef_used)
 
     return scalar lb = `lb'
     return scalar min_defier_share = `min_def'
@@ -340,6 +193,213 @@ else {
     di as res "  lower bound = " %9.6f `lb'
 end
 
+
+
+
+*==============================================================
+* Mata helpers for the GLPK-based LP solver.
+* Implements LP1 (feasibility, min defiers share) and LP2 (fractional
+* lower bound). Called from the ado via testmechs_lbfrac__solve_lps().
+*==============================================================
+mata:
+
+// Solve GLPK LP: min c'x s.t. Aeq x = beq, x >= 0.
+// Returns the objective on success, missing on failure.
+real scalar testmechs_lbfrac__glpk(real colvector c, real matrix Aeq, real colvector beq)
+{
+    st_matrix("__tm_c",   c)
+    st_matrix("__tm_Aeq", Aeq)
+    st_matrix("__tm_beq", beq)
+    stata(`"plugin call _testmechs_glpk_lp, "__tm_c" "__tm_Aeq" "__tm_beq" "__tm_lp_fun" "__tm_lp_ok""')
+    if (st_numscalar("__tm_lp_ok") != 1) return(.)
+    return(st_numscalar("__tm_lp_fun"))
+}
+
+// LP1: feasibility. Find the minimum sum_{i>j} X[i,j] subject to the
+// marginal constraints. Returns the minimum defiers share.
+real scalar testmechs_lbfrac__lp1(real colvector p1, real colvector p0)
+{
+    real scalar K, nvar, i, j
+    real colvector c, beq
+    real matrix Aeq
+
+    K    = length(p1)
+    nvar = K * K
+
+    // Objective: 1 on X[i,j] for i>j, else 0. Flatten with idx(i,j)=(i-1)*K+j
+    c = J(nvar, 1, 0)
+    for (i = 1; i <= K; i++) {
+        for (j = 1; j <= K; j++) {
+            if (i > j) c[(i-1) * K + j] = 1
+        }
+    }
+
+    // 2K equality constraints: K for j-marginals, K for i-marginals
+    Aeq = J(2 * K, nvar, 0)
+    beq = J(2 * K, 1, 0)
+
+    // Row j (1..K): sum_i X[i,j] = p1[j]
+    for (j = 1; j <= K; j++) {
+        for (i = 1; i <= K; i++) {
+            Aeq[j, (i-1) * K + j] = 1
+        }
+        beq[j] = p1[j]
+    }
+    // Row K+i (i=1..K): sum_j X[i,j] = p0[i]
+    for (i = 1; i <= K; i++) {
+        for (j = 1; j <= K; j++) {
+            Aeq[K + i, (i-1) * K + j] = 1
+        }
+        beq[K + i] = p0[i]
+    }
+
+    return(testmechs_lbfrac__glpk(c, Aeq, beq))
+}
+
+// LP2: fractional lower bound.
+//
+// Variables (in this order):
+//   X[i,j] for i,j in 1..K              (K^2 vars, idx(i,j) = (i-1)*K + j)
+//   s[k] for k in 1..K                  (K vars,   at positions K^2+1..K^2+K)
+//   t                                   (1 var,    at position K^2+K+1)
+//   slack_k for k in 1..K               (K slacks for the "defier cap" rows)
+//   slack_maxdef                        (1 slack for the maxdef row)
+// Total variables: K^2 + K + 1 + K + 1 = K^2 + 2K + 2
+//
+// Constraints (all as equalities after adding slacks):
+//   K rows:  sum_i X[i,j] - p1[j]*t = 0                     (j-marginal, equality)
+//   K rows:  sum_j X[i,j] - p0[i]*t = 0                     (i-marginal, equality)
+//   1 row:   sum_{g in groups} X[g,g] = 1                   (equality)
+//   K rows:  -sum_{i!=k} X[i,k] - s[k] + md[k]*t + slack_k = 0   (defier cap)
+//   1 row:   sum_{i>j} X[i,j] - maxdef*t + slack_maxdef = 0      (maxdef bound)
+// Total rows: 3K + 2
+real scalar testmechs_lbfrac__lp2(real colvector p1, real colvector p0,
+                                   real colvector md, real scalar atindex,
+                                   real scalar maxdef)
+{
+    real scalar K, nX, nS, nT, nSlack, nvar, nrows, i, j, k, g, rowc, tix, slack_start, gi
+    real colvector c, beq, groups
+    real matrix Aeq
+
+    K = length(p1)
+    nX = K * K
+    nS = K
+    nT = 1
+    nSlack = K + 1
+    nvar = nX + nS + nT + nSlack
+
+    tix = nX + nS + nT                    // 1-based index of t
+    slack_start = nX + nS + nT + 1        // 1-based index of first slack
+
+    // Which g contribute to the "sum X[g,g] = 1" row and to the objective
+    if (atindex == 0) groups = (1::K)
+    else              groups = J(1, 1, atindex)
+
+    // Objective: 1 on s[g] for g in groups, 0 otherwise. s[k] is at nX + k.
+    c = J(nvar, 1, 0)
+    for (gi = 1; gi <= length(groups); gi++) {
+        g = groups[gi]
+        c[nX + g] = 1
+    }
+
+    nrows = 3 * K + 2
+    Aeq = J(nrows, nvar, 0)
+    beq = J(nrows, 1, 0)
+
+    rowc = 0
+
+    // Rows 1..K: sum_i X[i,j] - p1[j]*t = 0
+    for (j = 1; j <= K; j++) {
+        rowc = rowc + 1
+        for (i = 1; i <= K; i++) {
+            Aeq[rowc, (i-1)*K + j] = 1
+        }
+        Aeq[rowc, tix] = -p1[j]
+    }
+
+    // Rows K+1..2K: sum_j X[i,j] - p0[i]*t = 0
+    for (i = 1; i <= K; i++) {
+        rowc = rowc + 1
+        for (j = 1; j <= K; j++) {
+            Aeq[rowc, (i-1)*K + j] = 1
+        }
+        Aeq[rowc, tix] = -p0[i]
+    }
+
+    // Row 2K+1: sum_{g in groups} X[g,g] = 1
+    rowc = rowc + 1
+    for (gi = 1; gi <= length(groups); gi++) {
+        g = groups[gi]
+        Aeq[rowc, (g-1)*K + g] = 1
+    }
+    beq[rowc] = 1
+
+    // Rows 2K+2..3K+1: for each k, -sum_{i!=k} X[i,k] - s[k] + md[k]*t + slack_k = 0
+    for (k = 1; k <= K; k++) {
+        rowc = rowc + 1
+        for (i = 1; i <= K; i++) {
+            if (i != k) Aeq[rowc, (i-1)*K + k] = -1
+        }
+        Aeq[rowc, nX + k] = -1
+        Aeq[rowc, tix] = md[k]
+        Aeq[rowc, slack_start + (k - 1)] = 1
+    }
+
+    // Row 3K+2: sum_{i>j} X[i,j] - maxdef*t + slack_maxdef = 0
+    rowc = rowc + 1
+    for (i = 1; i <= K; i++) {
+        for (j = 1; j <= K; j++) {
+            if (i > j) Aeq[rowc, (i-1)*K + j] = 1
+        }
+    }
+    Aeq[rowc, tix] = -maxdef
+    Aeq[rowc, slack_start + K] = 1
+
+    return(testmechs_lbfrac__glpk(c, Aeq, beq))
+}
+
+// Driver called from the ado. Reads Stata state, computes both LPs,
+// writes results back to Stata scalars.
+void testmechs_lbfrac__solve_lps(string scalar p1name, string scalar p0name, string scalar mdname)
+{
+    real colvector p1, p0, md
+    real scalar K, atindex, maxdef, allowmin
+    real scalar min_def, maxdef_used, lb
+
+    K        = st_numscalar("__tm_lp_K")
+    atindex  = st_numscalar("__tm_lp_atindex")
+    maxdef   = st_numscalar("__tm_lp_maxdef")
+    allowmin = st_numscalar("__tm_lp_allowmin")
+
+    p1 = st_matrix(p1name)
+    p0 = st_matrix(p0name)
+    md = st_matrix(mdname)
+
+    // Ensure column vectors
+    if (cols(p1) > 1) p1 = p1'
+    if (cols(p0) > 1) p0 = p0'
+    if (cols(md) > 1) md = md'
+
+    min_def = testmechs_lbfrac__lp1(p1, p0)
+    if (min_def == .) _error(498, "GLPK feasibility LP failed")
+
+    if (min_def > maxdef) {
+        if (allowmin == 1) maxdef_used = min_def + 1e-6
+        else _error(2000, "data incompatible with maxdefiersshare when allowmindefiers is off")
+    }
+    else {
+        maxdef_used = maxdef
+    }
+
+    lb = testmechs_lbfrac__lp2(p1, p0, md, atindex, maxdef_used)
+    if (lb == .) _error(498, "GLPK fractional LP failed")
+
+    st_numscalar("__tm_lp_lb",          lb)
+    st_numscalar("__tm_lp_min_def",     min_def)
+    st_numscalar("__tm_lp_maxdef_used", maxdef_used)
+}
+
+end
 
 *==============================================================
 * testmechs__reg_prob: helper used by the reg_formula branch.
