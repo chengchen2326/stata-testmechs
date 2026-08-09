@@ -24,7 +24,7 @@ program define testmechs_test_sharpnull, rclass
     // First word = treatment (d), last word = outcome (y), middle words = mediator(s)
     version 16.0
     syntax varlist(min=3 max=100 numeric) [if] [in] , METHOD(string) ///
-    [NUMYBINS(integer 5) CLUSTER(varname) MAXDEFIERSSHARE(real 0) NEWDOFCS]
+    [NUMYBINS(integer 5) CLUSTER(varname) MAXDEFIERSSHARE(real 0) NEWDOFCS reg_formula(string)]
 
     if ("`method'" != "CS") {
         di as err "Only method(CS) is supported in this MVP implementation"
@@ -109,7 +109,16 @@ program define testmechs_test_sharpnull, rclass
     
     // Pass space-separated mediator names to Mata; Mata builds uni_m and PO internally
 	local ndofcs = cond("`newdofcs'" == "", 0, 1)
-    mata: testmechs__sharpnull_cs("`d'","`mvars'","`y'","`clusterid'","`touse2'",0.05,`numybins',`ndofcs',`maxdefiersshare')
+    // If reg_formula is set, prepare tempvars for the Mata function to
+    // populate and hand off to testmechs__reg_prob. Empty names signal "no reg".
+    tempvar tvd tvm tvy
+    if ("`reg_formula'" != "") {
+        quietly gen double `tvd' = .
+        quietly gen double `tvm' = .
+        quietly gen double `tvy' = .
+    }
+
+    mata: testmechs__sharpnull_cs("`d'","`mvars'","`y'","`clusterid'","`touse2'",0.05,`numybins',`ndofcs',`maxdefiersshare',"`reg_formula'","`tvd'","`tvm'","`tvy'")
 
     return scalar pval      = scalar(__tm_pval)
     return scalar test_stat = scalar(__tm_test_stat)
@@ -650,6 +659,7 @@ real colvector testmechs__qp_solve(real matrix P, real colvector q, real matrix 
     // Set eps tolerances (default in plugin is 1e-5; R TestMechs uses 1e-8)
     st_numscalar("__honestosqp_eps_abs", 1e-8)
     st_numscalar("__honestosqp_eps_rel", 1e-8)
+    st_numscalar("__honestosqp_max_iter", 100000)
 
     // OSQP() signature is (P, q, A, u, l, cleanup) -- note u before l!
     result = OSQP(P, q, A, u, l, 1)
@@ -668,7 +678,8 @@ real colvector testmechs__qp_solve(real matrix P, real colvector q, real matrix 
 // uniqrows() sorts the single column ascending, giving PO[l,k] = (l<=k).
 void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string scalar yvar,
     string scalar clvar, string scalar tousevar, real scalar alpha, real scalar numybins,
-    real scalar newdofcs, real scalar max_defiers_share)
+    real scalar newdofcs, real scalar max_defiers_share, string scalar reg_formula,
+    string scalar tvd_name, string scalar tvm_name, string scalar tvy_name)
 {
     real colvector d, m, y, cl, yvals, mvals, beta_obs, beta_shp, beta, d_Z
     real colvector p_m0, p_m1, p_ym0, p_ym1, beta_red, xhat, lvec, uvec, dvec, khat, clu, hqp
@@ -677,11 +688,16 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string
     real matrix ifs, ifs_cl, sigma_obs, A_obs, A_shp, A, sigma, eval, evec, B_Z, C_Z
     real matrix sigmaInv, Amat, Amat_aug, Dmat, Gqp
 
+    // reg_formula plumbing
+    string scalar reg_rhs, tmp_d, tmp_m, tmp_y, cmd_common
+    real scalar use_reg
+    real colvector if0_reg, if1_reg
+
     // For multivariate mediator support
     string rowvector mvars_tok
     real matrix M_mat, m_supp, PO
     real scalar J_med, ki, li, ji
-    real colvector uni_m, match_vec, complete_mask, idxs
+    real colvector uni_m, match_vec, complete_mask, idxs, keep_full
 
     real colvector keep
     keep = selectindex(st_data(., tousevar) :!= 0)
@@ -701,6 +717,10 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string
     for (ji=1; ji<=J_med; ji++) {
         complete_mask = complete_mask :& (M_mat[,ji] :< .)
     }
+    // Save ORIGINAL-dataset row indices of the surviving obs, so we can
+    // pull IF values from __tm_if_vec (which is indexed against st_nobs()).
+    keep_full = keep[selectindex(complete_mask)]
+
     keep = selectindex(complete_mask)
     d = d[keep]; y = y[keep]; cl = cl[keep]; M_mat = M_mat[keep,]
     if (rows(d) == 0) _error(2000, "No complete-case observations after filtering")
@@ -747,6 +767,13 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string
     m     = uni_m
     mvals = (1::k)
 
+    // Preprocess reg_formula: strip leading "~", drop stray whitespace
+    reg_rhs = strtrim(reg_formula)
+    if (strlen(reg_rhs) > 0 & substr(reg_rhs, 1, 1) == "~") {
+        reg_rhs = strtrim(substr(reg_rhs, 2, .))
+    }
+    use_reg = (strlen(reg_rhs) > 0)
+
     yvals = uniqrows(sort(y,1))
     jy    = rows(yvals)
 
@@ -760,6 +787,17 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string
     p_m0  = J(k, 1, .)
     p_m1  = J(k, 1, .)
 
+    // If reg_formula is set, populate the ado-created tempvars with the
+    // Mata vectors m (int-labeled) and discretized y so the reg helper
+    // can build the (y_val, m_val) indicator. dvar and touse2 are the
+    // ORIGINAL Stata variables passed straight through.
+    if (use_reg) {
+        tmp_m = tvm_name
+        tmp_y = tvy_name
+        st_store(., tmp_m, tousevar, m)
+        st_store(., tmp_y, tousevar, y)
+    }
+
     // Build IFs; my_values ordering: arrange(m, y) i.e. outer loop over m, inner over y
     ii = 0
     for (i=1; i<=k; i++) {
@@ -767,15 +805,47 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string
         ifm1 = J(n,1,0)
         for (r=1; r<=jy; r++) {
             ii = ii + 1
-            p_ym0[ii] = mean((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 0)) / pd0
-            p_ym1[ii] = mean((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 1)) / pd1
 
-            if0 = (d :== 0) :* (((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 0)) :- p_ym0[ii]) / pd0
-            if1 = (d :== 1) :* (((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 1)) :- p_ym1[ii]) / pd1
+            if (use_reg) {
+                cmd_common = "quietly testmechs__reg_prob, y_val(" + strofreal(yvals[r]) +
+                             ") m_val(" + strofreal(mvals[i]) +
+                             ") ywork(" + tmp_y +
+                             ") mgroup(" + tmp_m +
+                             ") dvar(" + dvar +
+                             ") touse2(" + tousevar +
+                             ") rhs(" + char(34) + reg_rhs + char(34) + ")"
 
-            ifs[,4*k + ii] = if1 - if0
-            ifm0 = ifm0 + if0
-            ifm1 = ifm1 + if1
+                stata(cmd_common + " trans(treated)")
+                p_ym1[ii] = st_numscalar("r(p)")
+                if1_reg = st_matrix("__tm_if_vec")
+                if1_reg = if1_reg[keep_full, 1]
+
+                stata(cmd_common + " trans(control)")
+                p_ym0[ii] = st_numscalar("r(p)")
+                if0_reg = st_matrix("__tm_if_vec")
+                if0_reg = if0_reg[keep_full, 1]
+
+                // Phase 2 v3: use regression IFs for BOTH cells AND marginals
+                // to keep sigma internally consistent.
+                // Cell IF: IF(p_ym1) - IF(p_ym0), matching R.
+                ifs[,4*k + ii] = if1_reg - if0_reg
+
+                // Marginals: sum regression cell IFs across y (matching R's
+                // rowSums(p_ym_0_centered_IFs[,idx,drop=FALSE])).
+                ifm0 = ifm0 + if0_reg
+                ifm1 = ifm1 + if1_reg
+            }
+            else {
+                p_ym0[ii] = mean((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 0)) / pd0
+                p_ym1[ii] = mean((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 1)) / pd1
+
+                if0 = (d :== 0) :* (((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 0)) :- p_ym0[ii]) / pd0
+                if1 = (d :== 1) :* (((y :== yvals[r]) :& (m :== mvals[i]) :& (d :== 1)) :- p_ym1[ii]) / pd1
+
+                ifs[,4*k + ii] = if1 - if0
+                ifm0 = ifm0 + if0
+                ifm1 = ifm1 + if1
+            }
         }
         p_m0[i] = sum(p_ym0[((i-1)*jy+1)..(i*jy)])
         p_m1[i] = sum(p_ym1[((i-1)*jy+1)..(i*jy)])
@@ -795,6 +865,7 @@ void testmechs__sharpnull_cs(string scalar dvar, string scalar mvars_str, string
         ifs_cl[i,.] = colsum(ifs[selectindex(cl :== clu[i]), .])
     }
     sigma_obs = (g > 1 ? g/(g-1) : 1) * (ifs_cl' * ifs_cl) / (n^2)
+
 
 	
 	
@@ -986,3 +1057,137 @@ end
 // Ado subroutine called by testmechs__lp_solve() via stata("_testmechs_lp_call").
 // Reads Stata matrices __tm_c, __tm_Aeq, __tm_beq, runs scipy.optimize.linprog
 // (HiGHS), and writes Stata scalars __tm_lp_fun and __tm_lp_ok.
+
+
+
+
+
+
+*==============================================================
+* testmechs__ols_if_build: build regression IF for one (y,m) cell.
+* IF_i = M[j,:] * x_i * e_i * n_reg  where M = (X'X)^{-1}.
+* Observations outside e(sample) get IF = 0.
+*==============================================================
+mata:
+void testmechs__ols_if_build(string scalar resid_name, string scalar Mrow_name,
+                              string scalar rhs_str, string scalar out_matname)
+{
+    real colvector resid, IF
+    real rowvector Mrow
+    real matrix X_full
+    real scalar n_full, n_reg, i
+    string rowvector cov_names
+
+    n_full = st_nobs()
+    resid  = st_data(., resid_name)
+    Mrow   = st_matrix(Mrow_name)
+
+    cov_names = tokens(rhs_str)
+    X_full = st_data(., cov_names)
+    X_full = X_full, J(n_full, 1, 1)
+
+    n_reg = st_numscalar("__tm_nreg")
+    IF = J(n_full, 1, 0)
+    for (i=1; i<=n_full; i++) {
+        if (resid[i] < .) {
+            IF[i] = (Mrow * X_full[i,]') * resid[i] * n_reg
+        }
+    }
+    st_matrix(out_matname, IF)
+}
+end
+
+*==============================================================
+* testmechs__reg_prob: helper used by the reg_formula branch.
+* Duplicated from testmechs_lb_fracaffected.ado — for a single
+* (y_val, m_val) cell, run a regression under R's
+* control_transform / treated_transform and return the coefficient
+* on the treatment variable in r(p).
+*==============================================================
+program define testmechs__reg_prob, rclass
+    version 16.0
+    syntax , y_val(real) m_val(real) ywork(varname) mgroup(varname) dvar(varname) touse2(varname) trans(string) rhs(string)
+
+    tempvar lhs
+    quietly gen double `lhs' = (`ywork' == `y_val' & `mgroup' == `m_val') if `touse2'
+
+    if "`trans'" == "treated" {
+        quietly replace `lhs' = `dvar' * `lhs' if `touse2'
+    }
+    else if "`trans'" == "control" {
+        quietly replace `lhs' = (`dvar' - 1) * `lhs' if `touse2'
+    }
+    else {
+        di as err "trans must be 'treated' or 'control'"
+        exit 198
+    }
+
+    * Guard: if lhs is constant, regression fails; return 0
+    quietly summarize `lhs' if `touse2'
+    if r(sd) == 0 {
+        return scalar p = 0
+        exit
+    }
+
+    * Detect IV syntax: does rhs contain "(<var> = <var>)"?
+    local iv_pattern 0
+    if regexm("`rhs'", "\((.+)=(.+)\)") local iv_pattern 1
+
+    if `iv_pattern' {
+        local endog = strtrim(regexs(1))
+        local instr = strtrim(regexs(2))
+
+        local controls : subinstr local rhs "(`endog' = `instr')" "", all
+        local controls : subinstr local controls "(`endog'= `instr')" "", all
+        local controls : subinstr local controls "(`endog' =`instr')" "", all
+        local controls : subinstr local controls "(`endog'=`instr')" "", all
+
+        local controls : subinstr local controls "+" " ", all
+        local controls = strtrim(stritrim("`controls'"))
+
+        capture quietly ivregress 2sls `lhs' `controls' (`endog' = `instr') if `touse2'
+        if _rc == 481 {
+            quietly regress `lhs' `endog' `controls' if `touse2'
+            return scalar p = _b[`endog']
+        }
+        else if _rc == 0 {
+            return scalar p = _b[`endog']
+        }
+        else {
+            ivregress 2sls `lhs' `controls' (`endog' = `instr') if `touse2'
+        }
+    }
+    else {
+        local clean_rhs : subinstr local rhs "+" " ", all
+        local clean_rhs = strtrim(stritrim("`clean_rhs'"))
+
+        quietly regress `lhs' `clean_rhs' if `touse2'
+        scalar __tm_p = _b[`dvar']
+
+        * Per-obs IF for _b[dvar]:  IF_i = M[j,:] * x_i * e_i * n_reg
+        * where M = (X'X)^{-1} = e(V) / sigma2. Result in __tm_if_vec.
+        tempvar resid
+        quietly predict double `resid' if e(sample), residuals
+
+        tempname V M Mrow
+        matrix `V' = e(V)
+        scalar __tm_sigma2 = e(rmse)^2
+        scalar __tm_nreg   = e(N)
+        matrix `M' = `V' / __tm_sigma2
+        local rownames : rownames `M'
+        local j_idx = 0
+        local ii = 0
+        foreach nm of local rownames {
+            local ++ii
+            if "`nm'" == "`dvar'" local j_idx = `ii'
+        }
+        if `j_idx' == 0 {
+            di as err "Could not locate dvar in regression coefficient names"
+            exit 498
+        }
+        matrix `Mrow' = `M'[`j_idx', 1..colsof(`M')]
+
+        mata: testmechs__ols_if_build("`resid'", "`Mrow'", "`clean_rhs'", "__tm_if_vec")
+        return scalar p = __tm_p
+    }
+end
