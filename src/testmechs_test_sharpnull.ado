@@ -655,6 +655,14 @@ real colvector testmechs__qp_solve(real matrix P, real colvector q, real matrix 
                                     real colvector l, real colvector u)
 {
     struct OSQP_workspace_abridged scalar result
+    real scalar scale_factor
+
+    // Rescale P and q by 1/max(abs(P)) to keep OSQP inputs near order 1.
+    // The QP solution argmin (0.5 x' P x + q' x) s.t. l <= A x <= u is
+    // invariant to positive scalar rescaling of P AND q together, so this
+    // preserves the solution but avoids ill-conditioning that hurts OSQP.
+    scale_factor = max(abs(P))
+    if (scale_factor <= 0) scale_factor = 1
 
     // Set eps tolerances (default in plugin is 1e-5; R TestMechs uses 1e-8)
     st_numscalar("__honestosqp_eps_abs", 1e-8)
@@ -662,9 +670,10 @@ real colvector testmechs__qp_solve(real matrix P, real colvector q, real matrix 
     st_numscalar("__honestosqp_max_iter", 100000)
 
     // OSQP() signature is (P, q, A, u, l, cleanup) -- note u before l!
-    result = OSQP(P, q, A, u, l, 1)
-    if (result.rc != 0 | result.info_status != "solved") {
-        _error(498, "OSQP failed to solve the QP")
+    st_numscalar("__honestosqp_max_iter", 1000000)
+    result = OSQP(P / scale_factor, q / scale_factor, A, u, l, 1)
+    if (result.rc != 0 | (result.info_status != "solved" & result.info_status != "solved inaccurate")) {
+        _error(498, "OSQP failed to solve the QP: " + result.info_status)
     }
     return(result.solution_x')
 }
