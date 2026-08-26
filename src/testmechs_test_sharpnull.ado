@@ -1135,6 +1135,10 @@ program define testmechs__reg_prob, rclass
     quietly summarize `lhs' if `touse2'
     if r(sd) == 0 {
         return scalar p = 0
+        * Also zero out the IF vector so caller doesn't read stale values.
+        * IF vec must be st_nobs() rows (indexed against full dataset).
+        quietly count
+        matrix __tm_if_vec = J(`r(N)', 1, 0)
         exit
     }
 
