@@ -18,16 +18,19 @@ This repository contains an **MVP Stata translation** of key functionality from 
 - `numybins(#)`
 - `maxdefiersshare(#)`
 - `allowmindefiers`
+- `reg_formula("...")` — OLS with controls and 2SLS IV syntax `(endog = instr)`. Perfect-instrument cases (instrument collinear with treatment) fall back to OLS to match R's `fixest` behavior. Cluster-robust inference via analytic influence functions (sandwich-form `M · x · e · n_reg` for OLS, `M · xhat · e_iv · n_reg` for 2SLS).
 - Multi-valued discrete mediators in the default binned-Y path
 - Lower bounds combining both mechanisms across two mediator variables
 - Cox–Shi sharp null test with cluster-robust standard errors
 
 ### Not yet implemented
 The following are **not yet implemented** and will return an error:
-- 🚫 `regformula()`
 - 🚫 `continuousy`
 - 🚫 `returnmindefiers`
 - 🚫 Sharp-null methods other than `CS` (e.g., `ARP`, `FSST`, `toru`)
+- 🚫 Specialised binary-M code path (see "Notes" below)
+- 🚫 `fixest`-style fixed-effect syntax (`| interviewer`) and IV-with-FE combined syntax
+- 🚫 `bounds_ade_ats` and `partial_density_plot`
 
 The original R source is kept under `r_reference/` for translation and validation.
 
@@ -414,19 +417,129 @@ Interpretation:
 
 ---
 
+## Non-experimental setting
+
+The examples above focus on data from a randomized controlled trial, where treatment `D` is randomly assigned. TestMechs assumes by default that we have an RCT, and treatment effects are estimated by comparing means for the treated and control group. However, TestMechs can also be applied in settings where we have conditional randomization given covariates or an instrumental variable for the treatment. Both `testmechs_test_sharpnull` and `testmechs_lb_fracaffected` accept the `reg_formula("...")` option, which allows the researcher to provide a regression formula (OLS or 2SLS IV) to estimate treatment effects after adjusting linearly for observable characteristics.
+
+The formula string uses R-style syntax (with a leading tilde), mirroring the R package's convention:
+- **OLS with controls:** `reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")`
+- **2SLS IV:** `reg_formula("~ age_baseline + edu_mo_baseline + wealth_baseline + (treat = iv)")` — the parenthesised `(endog = instr)` clause specifies the endogenous variable and its instrument.
+
+While adjusting for covariates is not necessary in our running example (which is an RCT), we can still adjust for covariates to increase precision. Below we illustrate using the baseline covariates `age_baseline`, `edu_mo_baseline`, and `wealth_baseline`. For brevity we focus on `testmechs_test_sharpnull`; the same `reg_formula` argument works with `testmechs_lb_fracaffected`.
+
+### 9. Sharp null with regression-adjusted probabilities (OLS controls)
+
+The key new argument is `reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")`. This says that we should estimate the effect of the treatment (`treat`) on `Y` and `M` (or functions thereof) by running a regression with the treatment variable and baseline controls on the right-hand side.
+
+#### R benchmark (Cox–Shi / CS with controls)
+
+```r
+test_result_gm_ols <- test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = "grandmother",
+  y = "motherfinancial",
+  reg_formula = "~ treat + age_baseline + edu_mo_baseline + wealth_baseline",
+  method = "CS",
+  num_Ybins = 5,
+  cluster = "uc"
+)
+test_result_gm_ols$pval
+#>            [,1]
+#> [1,] 0.03105106
+```
+
+#### Stata (Cox–Shi / CS with controls)
+
+```stata
+use "data/mother_data.dta", clear
+
+* varlist order is: d m y
+testmechs_test_sharpnull treat grandmother motherfinancial, ///
+    method(CS) numybins(5) cluster(uc) ///
+    reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")
+```
+
+#### Expected output (matches R)
+- `test_stat = 6.944244`
+- `cv        = 5.991465`
+- `p-value   = 0.03105106`
+
+Interpretation:
+- The p-value is about **0.031**, so the sharp null is rejected at the **5%** significance level after adjusting for baseline covariates.
+- Compared to the unadjusted result in example 5 (p = 0.023), the adjusted p-value is somewhat larger — the covariates absorb some of the variation that made the unadjusted test more powerful here.
+- Inference uses cluster-robust analytic influence functions: `IF_i = M[j,:] · x_i · e_i · n_reg` where `M = (X'X)^{-1}`, mirroring R's `sandwich::estfun · t(bread)` computation.
+
+---
+
+### 10. Sharp null with an instrumental variable (2SLS IV)
+
+We can also use `reg_formula` to estimate treatment effects using instrumental variables. To illustrate, we construct a noisy instrument for `treat` (analogous to the R README example) and then pass IV syntax to `reg_formula`.
+
+The IV portion is written as `(endog = instr)` inside the formula, matching Stata's `ivregress` convention: everything outside the parentheses is a control, and the parenthesised clause specifies the endogenous variable and its instrument.
+
+#### R benchmark (Cox–Shi / CS with IV)
+
+```r
+set.seed(0)
+mother_data$iv <- mother_data$treat + rnorm(n = length(mother_data$treat), sd = 0.1)  # iv = treat + noise
+
+test_result_gm_iv <- test_sharp_null(
+  df = mother_data,
+  d = "treat",
+  m = "grandmother",
+  y = "motherfinancial",
+  reg_formula = "~ age_baseline + edu_mo_baseline + wealth_baseline | treat ~ iv",
+  method = "CS",
+  num_Ybins = 5,
+  cluster = "uc"
+)
+test_result_gm_iv$pval
+#>           [,1]
+#> [1,] 0.0311524
+```
+
+#### Stata (Cox–Shi / CS with IV)
+
+```stata
+use "data/mother_data.dta", clear
+
+* Construct a noisy instrument (analogous to R's set.seed(0) + rnorm(sd=0.1))
+set seed 0
+gen double iv = treat + rnormal(0, 0.1)
+
+* varlist order is: d m y
+* IV syntax inside reg_formula uses (endog = instr)
+testmechs_test_sharpnull treat grandmother motherfinancial, ///
+    method(CS) numybins(5) cluster(uc) ///
+    reg_formula("~ age_baseline + edu_mo_baseline + wealth_baseline + (treat = iv)")
+```
+
+#### Notes on expected output
+
+- **Numerical result depends on random-number generator.** Stata's `rnormal(0, 0.1)` and R's `rnorm(sd = 0.1)` use different random-number streams, so the constructed `iv` variable will differ between the two runs even with the same seed. The Stata p-value will therefore not equal the R benchmark exactly; only the analytical procedure is the same. To get an exact numerical match against R, users would need to construct `iv` in R and export it (e.g. via `write_dta()`) or use a common noise source.
+- The 2SLS IV point estimate is computed via `ivregress 2sls`, and the per-observation influence function is built via the sandwich form `IF_i = M[j,:] · x̂_i · e_iv,i · n_reg` where `M = e(V)/rmse²` is the IV bread, `x̂_i` is the first-stage fitted regressor row, and `e_iv,i` is the IV residual. This exactly reproduces R's `sandwich::estfun(feols) · t(sandwich::bread(feols))` to machine precision on the same data — see `tests/verify/` for the element-wise verification against R.
+- **Perfect-instrument case:** if the instrument is collinear with the endogenous variable (Stata returns `r(481)`), the helper falls back to OLS treating the endog as a regular regressor. This mirrors R's `fixest` behavior in the same degenerate case, so the two produce identical point estimates and IFs when the "instrument" is a copy of the treatment.
+
+---
+
 ## Notes on numerical agreement with R
 
-All Cox–Shi p-values reported above match the R benchmark to at least 7 decimal places. Achieving this agreement required two design choices:
+All Cox–Shi p-values reported above match the R benchmark to at least 7 decimal places for the non-IV examples. Achieving this agreement required two design choices:
 
 1. **GLPK as the LP solver.** Earlier versions of this package used HiGHS (via `scipy.optimize.linprog`). HiGHS gave correct test statistics but selected slightly different LP vertices in near-degenerate cases, which propagated to small differences in the constraint-binding count and therefore the chi-squared degrees of freedom. Switching to GLPK (the same solver R uses) eliminates this source of disagreement. GLPK is now embedded directly in the bundled plugin `_testmechs_glpk_lp.plugin` — no `swiglpk` or system GLPK required.
 
 2. **R's `dqrdc2` for rank computation.** R's `qr(M, tol)$rank` uses `dqrdc2.f` — a 1995 modification by Ross Ihaka of LINPACK's `dqrdc`, available only in R's source tree. It applies a custom column-pivoting strategy that diverges from generic SVD-based or LAPACK QR rank computations on near-rank-deficient matrices. The difference is rare but consequential: for the `relationship_husb` test, SVD-based rank gave dof = 5 where `dqrdc2` gives dof = 4, leading to p-values of 0.0546 vs 0.0284. We therefore ship a precompiled Stata plugin (`src/_testmechs_dqrdc2_rank.plugin`) that calls `dqrdc2` directly from Mata, matching R's rank exactly.
 
+For **`reg_formula` cases**, the OLS-with-controls path also matches R exactly (see example 9). The IV path reproduces R's sandwich-form influence function per observation to machine precision (verified in `tests/verify/`), so end-to-end p-values match R exactly for `K ≥ 3` (multi-valued or combined mediators). For `K = 2` (binary M) IV cases, however, R auto-dispatches to a specialised `test_sharp_null_binary_m` code path (with a different Cox–Shi variant tuned for the binary-M no-nuisance case). The Stata port only implements the general CS code path, so **binary-M IV p-values may differ from R's binary-M-path p-values**. The general CS output remains a valid CS test; porting the binary-M specialisation is on the roadmap pending priority.
+
 ---
 
 ## Notes
 
-- The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path.
-- At the moment, unsupported options such as `regformula()` and `continuousy` will return an error rather than silently falling back to another behavior.
+- The current Stata implementation is designed to match the R package benchmarks for the supported default / binned-Y path and the `reg_formula` OLS / 2SLS IV paths.
+- Unsupported options such as `continuousy` will return an error rather than silently falling back to another behavior.
 - Additional sharp-null methods from the R package (`ARP`, `FSST`, `toru`) are not yet implemented and will return an error.
+- The specialised binary-M code path (used by R for K = 2 IV cases) is not ported; users get valid general-CS output on those cases but the exact p-value will differ from R.
 - The default degree-of-freedom algorithm (`new_dof_CS = FALSE`) is implemented; the alternative (`new_dof_CS = TRUE`) Cox–Shi formulas remain on the roadmap.
+- `fixest`-style fixed-effect syntax (`| interviewer`) and IV-with-FE combined syntax are not supported; use `i.interviewer` explicitly on the RHS as a workaround for fixed effects.
