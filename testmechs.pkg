@@ -1,12 +1,17 @@
-v 0.0.9
+v 0.1.0
 d TestMechs (MVP): Stata translation of Jon Roth & Soonwoo Kwon's TestMechs R package.
 d
 d Installation:
 d   net install testmechs, from("https://raw.githubusercontent.com/chengchen2326/stata-testmechs/main") replace
 d
-d testmechs_test_sharpnull (Cox-Shi sharp null test) now ships three bundled Stata
-d plugins for its numerical work: dqrdc2 for rank computation, GLPK for LP, and
-d OSQP for QP. No Python installation is required.
+d testmechs_test_sharpnull (Cox-Shi sharp null test) and testmechs_lb_fracaffected
+d (lower bound on fraction of always-takers affected) support randomized settings
+d and non-experimental settings via reg_formula (OLS with controls or 2SLS IV).
+d Cluster-robust inference uses analytic influence functions verified against
+d R's sandwich::estfun x t(bread) to machine precision.
+d
+d All numerical work runs in three bundled Stata plugins: dqrdc2 for rank
+d computation, GLPK for LP, and OSQP for QP. No Python installation is required.
 d
 d Precompiled plugins ship for macOS Apple Silicon, macOS Intel, Linux x86_64,
 d and Windows x86_64.
