@@ -1160,11 +1160,76 @@ program define testmechs__reg_prob, rclass
 
         capture quietly ivregress 2sls `lhs' `controls' (`endog' = `instr') if `touse2'
         if _rc == 481 {
+            * Perfect-instrument case: fall back to OLS treating endog as regressor.
+            * Same IF logic as the OLS branch below (endog plays role of dvar).
             quietly regress `lhs' `endog' `controls' if `touse2'
-            return scalar p = _b[`endog']
+            scalar __tm_p = _b[`endog']
+
+            tempvar resid_iv481
+            quietly predict double `resid_iv481' if e(sample), residuals
+
+            tempname V_iv481 M_iv481 Mrow_iv481
+            matrix `V_iv481' = e(V)
+            scalar __tm_sigma2 = e(rmse)^2
+            scalar __tm_nreg   = e(N)
+            matrix `M_iv481' = `V_iv481' / __tm_sigma2
+            local rn_iv481 : rownames `M_iv481'
+            local j_iv481 = 0
+            local ii_iv481 = 0
+            foreach nm of local rn_iv481 {
+                local ++ii_iv481
+                if "`nm'" == "`endog'" local j_iv481 = `ii_iv481'
+            }
+            if `j_iv481' == 0 {
+                di as err "Could not locate endog in OLS-fallback coefficient names"
+                exit 498
+            }
+            matrix `Mrow_iv481' = `M_iv481'[`j_iv481', 1..colsof(`M_iv481')]
+
+            local rhs_iv481 `endog' `controls'
+            mata: testmechs__ols_if_build("`resid_iv481'", "`Mrow_iv481'", "`rhs_iv481'", "__tm_if_vec")
+            return scalar p = __tm_p
         }
         else if _rc == 0 {
-            return scalar p = _b[`endog']
+            * True IV case (2SLS). IF uses first-stage fitted endog:
+            *   IF_i = M[j,:] * xhat_i * e_iv,i * n_reg
+            * where M     = (Xhat'Xhat)^{-1} = e(V) / e(rmse)^2
+            *       xhat_i = [xhat_endog, controls, 1]
+            *       e_iv,i = y - X'beta_iv (IV residual, ORIGINAL x)
+            scalar __tm_p_iv = _b[`endog']
+
+            * Grab IV bread and residuals BEFORE the first-stage regression
+            * overwrites e() results.
+            tempname V_iv M_iv Mrow_iv
+            matrix `V_iv' = e(V)
+            scalar __tm_sigma2 = e(rmse)^2
+            scalar __tm_nreg   = e(N)
+            matrix `M_iv' = `V_iv' / __tm_sigma2
+            local rn_iv : rownames `M_iv'
+            local j_iv = 0
+            local ii_iv = 0
+            foreach nm of local rn_iv {
+                local ++ii_iv
+                if "`nm'" == "`endog'" local j_iv = `ii_iv'
+            }
+            if `j_iv' == 0 {
+                di as err "Could not locate endog in IV coefficient names"
+                exit 498
+            }
+            matrix `Mrow_iv' = `M_iv'[`j_iv', 1..colsof(`M_iv')]
+
+            tempvar resid_iv
+            quietly predict double `resid_iv' if e(sample), residuals
+
+            * Run first stage explicitly to get xhat_endog. Overwrites e().
+            tempvar xhat_endog
+            quietly regress `endog' `controls' `instr' if `touse2'
+            quietly predict double `xhat_endog' if e(sample), xb
+
+            * Build a working rhs string with xhat_endog replacing endog.
+            local rhs_iv `xhat_endog' `controls'
+            mata: testmechs__ols_if_build("`resid_iv'", "`Mrow_iv'", "`rhs_iv'", "__tm_if_vec")
+            return scalar p = __tm_p_iv
         }
         else {
             ivregress 2sls `lhs' `controls' (`endog' = `instr') if `touse2'
