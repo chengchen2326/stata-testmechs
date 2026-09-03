@@ -1,0 +1,34 @@
+# =============================================================================
+# GitHub Linguist configuration
+# https://github.com/github-linguist/linguist/blob/main/docs/overrides.md
+#
+# We ship a small Stata package (~1.5k lines of .ado + .mata) plus large
+# vendored dependencies from R, BLAS, GLPK, OSQP, and Stata's plugin SDK.
+# Without these hints, GitHub reports Fortran as the primary language
+# (because src/dqrdc2_src/blas.f is ~10k lines by itself).
+# =============================================================================
+
+# --- Vendored Fortran: R's dqrdc2 + its BLAS dependencies ---
+src/dqrdc2_src/blas.f          linguist-vendored
+src/dqrdc2_src/dqrdc2.f        linguist-vendored
+src/dqrdc2_src/dnrm2.f         linguist-vendored
+src/dqrdc2_src/xerbla_stub.f   linguist-vendored
+
+# --- Vendored: entire GLPK 5.0 source tree ---
+src/glpk_src/**                linguist-vendored
+
+# --- Vendored: Stata plugin SDK ---
+src/*/stplugin.c               linguist-vendored
+src/*/stplugin.h               linguist-vendored
+src/osqp_qp_src/sf_printf.c    linguist-vendored
+src/osqp_qp_src/sf_printf.h    linguist-vendored
+
+# --- Reference material (upstream R package for comparison) ---
+r_reference/**                 linguist-vendored
+
+# --- Data files ---
+*.dta                          linguist-generated
+*.rda                          linguist-generated
+
+# --- Binary plugins we build and ship ---
+src/*.plugin                   binary
