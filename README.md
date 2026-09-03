@@ -1,6 +1,8 @@
 # stata-testmechs (MVP)
 
-This repository contains an **MVP Stata translation** of key functionality from Jon Roth & Soonwoo Kwon's **TestMechs** R package (paper: *Testing Mechanisms*).
+This repository contains an **MVP Stata translation** of key functionality from Jon Roth & Soonwoo Kwon's **TestMechs** R package (paper: [*Testing Mechanisms*](https://www.jonathandroth.com/assets/files/TestingMechanisms_Draft.pdf)).
+
+The package provides tests for the **"sharp null of full mediation"** — the hypothesis that a treatment `D` affects an outcome `Y` **only** through a specified mediator `M` (or set of mediators). Rejection means the treatment has a direct effect that is not routed through `M`. It also provides **lower bounds on the fraction of "always-takers"** — the fraction of people whose outcome is affected by the treatment despite having the same value of `M` regardless of treatment status. Both entry-points support randomized treatment (the default) and conditional random assignment or IV via the `reg_formula()` option. As in the paper, the mediator `M` must be discrete.
 
 ## Status (MVP scope)
 
@@ -30,7 +32,8 @@ The following are **not yet implemented** and will return an error:
 - 🚫 Sharp-null methods other than `CS` (e.g., `ARP`, `FSST`, `toru`)
 - 🚫 Specialised binary-M code path (see "Notes" below)
 - 🚫 `fixest`-style fixed-effect syntax (`| interviewer`) and IV-with-FE combined syntax
-- 🚫 `bounds_ade_ats` and `partial_density_plot`
+- 🚫 `bounds_ade_ats` — no Stata equivalent yet
+- 🚫 `partial_density_plot` — no Stata command yet, but see the "Graphical evidence" section below for a manually-generated version and a reproducible do-file (`tests/verify/make_partial_density_figure.do`)
 
 The original R source is kept under `r_reference/` for translation and validation.
 
@@ -89,32 +92,28 @@ All three plugins are pre-shipped for **macOS Apple Silicon**, **macOS Intel (x8
 
 ---
 
+## Application to Baranov et al. (2020)
+
+The examples below walk through applying the package to the setting of [Baranov et al. (2020)](https://www.aeaweb.org/articles?id=10.1257/aer.20180511), which is used as the running example in Section 5.2 of *Testing Mechanisms*. Baranov et al. randomized access to cognitive behavioral therapy (CBT) for depression among new mothers in Pakistan, with treatment assigned at the level of the Union Council (40 clusters, 20 treated and 20 control, roughly 600 women in total). They find that CBT substantially reduces depression rates and increases mothers' **financial empowerment** (a composite index covering work outside the home, control over finances, etc.).
+
+They would like to understand **which mechanisms** drive the effect of CBT on financial empowerment. Two candidate mediators appear plausible:
+
+- **`grandmother`** — a binary indicator for whether a grandmother is present in the home (child-care support that might free the mother to work)
+- **`relationship_husb`** — the quality of the woman's relationship with her husband, on a 1–5 scale (a healthier household environment)
+
+In the notation of the paper, `D = treat`, `Y = motherfinancial`, and `M` is one (or a combination) of the two candidate mediators. The core question is: **does the treatment effect operate entirely through `M`?** If so, we would fail to reject the sharp null of full mediation for that `M`. If not, the direct effect (through mechanisms other than `M`) is what the lower-bound calculation quantifies.
+
+We first show the standard randomized-assignment analysis (examples 1–8), then re-do the same tests with regression adjustment and IV (examples 9–10) to show how the package handles conditional random assignment and non-experimental settings.
+
+---
+
 ## Examples
 
 ### 1. Lower bound on the fraction of never-takers affected
 
-The test above suggests that the treatment effect does not operate entirely through the presence of a grandmother in the home. There are some people (never-takers) whose outcome is affected by the treatment despite having no change in `M`. It must be that some other mechanism mattered for these people.
+Before we get to the formal test, it helps to see the size of the "residual mechanism" the test is trying to detect. If the treatment operated entirely through `grandmother` presence, then people whose grandmother status is the same under both treatment and control (the never-takers, with `M = 0`, and the always-takers, with `M = 1`) should have identical outcome distributions across treatment arms. The **lower bound on the fraction of never-takers affected by treatment** is a point estimate of how much this identical-distribution assumption is violated in the data — i.e. what fraction of never-takers must have a direct effect of `D` on `Y` not routed through `M`.
 
-But how prevalent are these alternative mechanisms? To give a sense, we compute lower bounds on the fraction of never-takers whose outcome is affected by the treatment despite having the same value of `M` under both treatments. This gives a sense of the strength of mechanisms other than `M`: it tells us what fraction of the never-takers have a direct effect of the treatment.
-
-The argument `at_group = 0` corresponds to computing this lower bound for the never-takers, who are referred to as "0-always takers" in the more general notation in the paper.
-
-#### R benchmark
-
-```r
-lb_nts <- lb_frac_affected(
-  df = mother_data,
-  d = "treat",
-  m = "grandmother",
-  y = "motherfinancial",
-  num_Ybins = 5,
-  at_group = 0
-)
-lb_nts
-#> [1] 0.1858912
-```
-
-#### Stata
+The argument `atgroup(0)` picks the never-taker sub-group (people with `M = 0` under both treatments, i.e. no grandmother). In the paper's more general notation, this is the "0-always-takers" bound.
 
 ```stata
 use "data/mother_data.dta", clear
@@ -124,105 +123,52 @@ testmechs_lb_fracaffected treat grandmother motherfinancial, ///
     numybins(5) atgroup(0)
 ```
 
-#### Expected output
-- `lower bound = 0.185891` (R benchmark: `0.1858912`)
+**Expected output:** `lower bound = 0.185891` (matches R benchmark of `0.1858912`).
 
-Our estimates imply that at least 19 percent of never-takers are affected by the treatment.
-
-One could likewise test the fraction of never-takers affected by setting `at_group = 1` (in this case, the lower bound is zero). If `at_group` is set to `NULL`, then the package calculates the fraction pooling across all types that have the same value of `M` under both treatments (i.e. always-takers and never-takers when `M` is binary).
+**Interpretation.** At least **19 percent** of never-takers are affected by the treatment despite having no grandmother present in either treatment arm. That's a substantial residual channel, and it is what the formal test in example 5 will pick up as a rejection of the sharp null. You can request the analogous bound for always-takers with `atgroup(1)` (in this application the lower bound is zero — no evidence of a direct effect among people who already had a grandmother). Omitting `atgroup()` pools across always-takers and never-takers, matching R's `at_group = NULL` behavior.
 
 ---
 
-### 2. Lower bound under relaxed monotonicity (`max_defiers_share`)
+### 2. Lower bound under relaxed monotonicity (`maxdefiersshare`)
 
-Likewise, we can also calculate the lower bound on the fraction of never-takers under relaxed monotonicity.
-
-#### R benchmark
-
-```r
-lb_nts_defiers <- lb_frac_affected(
-  df = mother_data,
-  d = "treat",
-  m = "grandmother",
-  y = "motherfinancial",
-  num_Ybins = 5,
-  at_group = 0,
-  max_defiers_share = .01
-)
-lb_nts_defiers
-#> [1] 0.1716415
-```
-
-#### Stata
+The default calculation assumes **monotonicity**: treatment can only increase `M`. In this application, this means that everyone who would have a grandmother present without receiving CBT would also have one present when receiving CBT (no "defier" who loses a grandmother because of CBT). Monotonicity is a maintained assumption in many mediation frameworks but is testable to some extent, and in some applications you may want to relax it. `maxdefiersshare(#)` allows a positive share of the population to be defiers, and the lower bound is re-computed under that relaxed constraint.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* varlist order is: d m y
 testmechs_lb_fracaffected treat grandmother motherfinancial, ///
     numybins(5) atgroup(0) maxdefiersshare(.01)
 ```
 
-#### Expected output
-- `lower bound = 0.171642` (R benchmark: `0.1716415`)
+**Expected output:** `lower bound = 0.171642` (matches R benchmark of `0.1716415`).
+
+**Interpretation.** Allowing up to 1% of the population to be defiers lowers the estimated bound only slightly, from 19% to 17%. The estimated direct-effect channel is robust to a small monotonicity violation. Allowing progressively larger defier shares will eventually shrink the bound to zero.
 
 ---
 
-### 3. Multi-valued mediator example with `allow_min_defiers`
+### 3. Multi-valued mediator example with `allowmindefiers`
 
-We can also estimate a lower bound combining both mechanisms when the mediator is multi-valued.
-
-#### R benchmark
-
-```r
-lb_frac_affected(
-  df = mother_data,
-  d = "treat",
-  m = "relationship_husb",
-  y = "motherfinancial",
-  num_Ybins = 5,
-  at_group = NULL,
-  allow_min_defiers = TRUE
-)
-#> [1] 0.1002207
-```
-
-#### Stata
+`relationship_husb` is measured on a 1–5 scale, so it is a **multi-valued discrete mediator**. The lower-bound machinery still applies; we just pool across always-taker types (all subgroups with the same value of `M` under both treatments) by omitting `atgroup()`. The empirical distribution here suggests a small amount of monotonicity violation, so we pass `allowmindefiers` — this asks the command to raise the defier cap to the smallest value the data can accommodate, rather than erroring out.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* varlist order is: d m y
-* omit atgroup() to match at_group = NULL
+* omit atgroup() to match R's at_group = NULL (pooled across always-taker types)
 testmechs_lb_fracaffected treat relationship_husb motherfinancial, ///
     numybins(5) allowmindefiers
 ```
 
-#### Expected output
-- `lower bound = 0.100221` (R benchmark: `0.1002207`)
+**Expected output:** `lower bound = 0.100221` (matches R benchmark of `0.1002207`).
+
+**Interpretation.** At least **10 percent** of always-takers (pooled across relationship-quality levels) are affected by treatment through channels other than relationship quality. The bound is nontrivial but smaller than the grandmother bound (19%), suggesting relationship quality "explains more" of the treatment effect than grandmother presence, though neither explains it fully.
+
+*A caveat on discretization.* The paper's method works for multi-valued discrete mediators like this 1–5 scale, but statistical power decreases as `M` approaches a continuous variable — see Remarks 2 and 3 of the paper.
 
 ---
 
 ### 4. Combination of both mechanisms: lower bound across two mediator variables
 
-We can estimate a lower bound on the fraction of those affected by treatment, combining both mechanisms across two mediator variables.
-
-#### R benchmark
-
-```r
-lb_frac_both <- lb_frac_affected(
-  df = mother_data,
-  d = "treat",
-  m = c("relationship_husb", "grandmother"),
-  y = "motherfinancial",
-  num_Ybins = 5,
-  allow_min_defiers = TRUE
-)
-lb_frac_both
-#> [1] 0.07251284
-```
-
-#### Stata
+The final piece of the story is: what if **both** mechanisms (grandmother AND relationship quality) together account for the treatment effect? The package computes a joint bound on the fraction of always-takers affected across both mediators by passing both mediator variables in the varlist.
 
 ```stata
 use "data/mother_data.dta", clear
@@ -232,171 +178,119 @@ testmechs_lb_fracaffected treat relationship_husb grandmother motherfinancial, /
     numybins(5) allowmindefiers
 ```
 
-#### Expected output
-- `lower bound = 0.072513` (R benchmark: `0.07251284`)
+**Expected output:** `lower bound = 0.072513` (matches R benchmark of `0.07251284`).
 
-We estimate a lower bound of about 7 percent, although this does not appear to be statistically significant given the test result above.
+**Interpretation.** When we allow the two mediators to *jointly* account for the treatment effect, the residual "unexplained" fraction of always-takers falls to about **7 percent**. This is a point estimate; its statistical significance is addressed by the sharp-null test in example 8.
+
+---
+
+## Graphical evidence
+
+Before running the formal test in example 5, it is often helpful to look at
+the data visually. The R package provides `partial_density_plot()` for this.
+The Stata port does not yet ship an equivalent command, but the same figure
+is easy to build with `graph bar`. Below is the Stata version of the R
+README's `nt_plot` (see `tests/verify/make_partial_density_figure.do` for
+the reproducible code).
+
+The plot shows the two estimated conditional probabilities
+
+- P(Y = y, M = 0 | D = 1) — treated group with no grandmother present
+- P(Y = y, M = 0 | D = 0) — control group with no grandmother present
+
+for each Y bin. Under monotonicity, treatment can only add grandmothers, not
+remove them, so the treated distribution on M = 0 should stochastically lie
+**below** the control distribution — in particular, the **treated bars
+should be no taller than the control bars** for each Y value. A treated bar
+that is visibly taller than the corresponding control bar is a data-level
+violation of the sharp null.
+
+![Partial density plot: no grandmother present (M = 0)](figures/partial_density_grandmother_nt.png)
+
+**What we see.** For Y bins 1, 2, and 3 (the bottom three-fifths of the
+financial empowerment index), the treated bars are visibly *taller* than
+the control bars — the opposite of what monotonicity + full mediation would
+predict. This is exactly the pattern of sharp-null violation the formal
+Cox–Shi test picks up as a rejection in example 5 (p ≈ 0.023). The high
+control bar at Y bin 4 goes the "right" way (control > treated), which
+partly attenuates the total violation but is not enough to save the null.
+
+The figure is not a substitute for the formal test — it does not
+carry uncertainty quantification, and small differences between the bars
+could plausibly be sampling noise. But it makes the mechanism concrete: the
+Cox–Shi test is checking whether the pattern of inequality violations in
+this kind of picture is large enough to be inconsistent with the sharp null.
 
 ---
 
 ### 5. Testing the sharp null of full mediation (Cox and Shi, 2023)
 
-While the lower-bound calculations above can hint at a violation of full mediation, they do not provide uncertainty quantification. The sharp null test conducts statistical inference for the sharp null of full mediation using the method described in Section 4 of the paper.
-
-In the upstream R package, `test_sharp_null()` supports multiple test procedures. The **recommended default** for most applications is the Cox and Shi (2023) test (`method = "CS"`). Other methods (e.g., `ARP`, `FSST`, and for binary mediators `toru`) are available in R, but are **not** implemented in this Stata MVP.
-
-#### R benchmark (Cox–Shi / CS)
-
-```r
-test_result <- test_sharp_null(
-  df = mother_data,
-  d = "treat",
-  m = "grandmother",
-  y = "motherfinancial",
-  method = "CS",      # Cox and Shi (recommended default)
-  num_Ybins = 5,      # discretize Y into 5 bins
-  cluster = "uc"      # cluster at uc level
-)
-test_result$pval
-#>            [,1]
-#> [1,] 0.02283916
-```
-
-#### Stata (Cox–Shi / CS)
+The lower-bound calculations above give point estimates but no uncertainty quantification. The **sharp null test** conducts statistical inference for the hypothesis of full mediation using the method in Section 4 of the paper. The recommended default is the Cox and Shi (2023) test (`method(CS)`). Other methods (`ARP`, `FSST`, and — when `M` is binary — `toru`) are in the R package but **not** in this Stata MVP.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* varlist order is: d m y
 testmechs_test_sharpnull treat grandmother motherfinancial, ///
     method(CS) numybins(5) cluster(uc)
 ```
 
-#### Expected output (matches R)
+**Expected output** (matches R):
 - `test_stat = 7.558558`
 - `cv        = 5.991465`
 - `p-value   = 0.02283916`
 
-Interpretation:
-- The p-value is about **0.023**, so the sharp null is rejected at the **5%** significance level.
-- As in the R documentation, the reported p-value corresponds to the smallest value of **α** for which the test rejects.
-- The test discretizes `Y` into bins (here `numybins(5)`). Since the inference relies on a CLT approximation, choose the number of bins small enough that the CLT is reasonable within cells defined by the combination of `(Y, M, D)` (and clusters if `cluster()` is used).
+**Interpretation.** The p-value is about **0.023**, so we reject the sharp null at the 5% significance level. **The treatment effect on financial empowerment does not operate entirely through the presence of a grandmother.** This is what the point-estimate lower bound in example 1 already hinted at — at least 19% of never-takers are affected — but now with formal inference.
+
+*A few practical points.*
+- The reported p-value corresponds to the smallest α at which the test rejects, following the R convention.
+- The test relies on a central-limit-theorem approximation within cells defined by `(Y, M, D)` (and clusters, when `cluster()` is set). Choose `numybins()` small enough that the CLT is credible within each cell. Here `numybins(5)` gives ~60 observations per cell, which is comfortable.
+- `cluster(uc)` cluster-adjusts the standard errors at the Union Council level, matching Baranov et al.'s randomization design.
 
 ---
 
 ### 6. Results for an alternative mechanism (`relationship_husb`)
 
-We next turn to the setting where we are interested in testing whether the effect is mediated by relationship quality with the husband, which is measured on a 1-5 scale. We can again test the sharp null and estimate a lower bound on the fraction affected.
-
-#### R benchmark (Cox–Shi / CS)
-
-```r
-test_result_husb <- test_sharp_null(
-  df = mother_data,
-  d = "treat",
-  m = "relationship_husb",
-  y = "motherfinancial",
-  method = "CS",      # Cox and Shi (recommended default)
-  num_Ybins = 5,      # discretize Y into 5 bins
-  cluster = "uc"      # cluster at uc level
-)
-test_result_husb$pval
-#>            [,1]
-#> [1,] 0.02838332
-```
-
-#### Stata (Cox–Shi / CS)
+We repeat the sharp-null test using **relationship quality with the husband** (the 1–5 scale) as the mediator. Multi-valued `M` is handled directly — no special option needed.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* varlist order is: d m y
 testmechs_test_sharpnull treat relationship_husb motherfinancial, ///
     method(CS) numybins(5) cluster(uc)
 ```
 
-#### Expected output (matches R)
+**Expected output** (matches R):
 - `test_stat = 10.843249`
 - `cv        = 9.487729`
 - `p-value   = 0.02838332`
 
-Interpretation:
-- The p-value is about **0.028**, so the sharp null is rejected at the **5%** significance level.
-- This suggests that the treatment effect is not fully mediated by relationship quality with the husband alone.
-- As above, the test discretizes `Y` into bins, so the choice of `numybins(5)` should balance granularity with the quality of the asymptotic approximation within `(Y, M, D)` cells.
+**Interpretation.** With p ≈ 0.028, we also reject full mediation through relationship quality alone. As with grandmother presence, some direct effect of CBT on financial empowerment remains unexplained by this single mediator.
 
 ---
 
 ### 7. Sharp null test under relaxed monotonicity (`maxdefiersshare`)
 
-By default, TestMechs imposes the monotonicity assumption that the treatment can only increase the value of `M`. In this setting, this means that everyone who would have a grandmother present without receiving CBT treatment would also have one present when receiving CBT treatment. We can relax this assumption by setting `maxdefiersshare` to be non-zero, which bounds the number of "defiers" by that share.
-
-We rerun the sharp null test above with `maxdefiersshare(0.01)`, which allows one percent of the population to be defiers.
-
-#### R benchmark (Cox–Shi / CS)
-
-```r
-test_result_defiers <- test_sharp_null(
-  df = mother_data,
-  d = "treat",
-  m = "grandmother",
-  y = "motherfinancial",
-  method = "CS",
-  num_Ybins = 5,
-  cluster = "uc",
-  max_defiers_share = .01
-)
-test_result_defiers$pval
-#>            [,1]
-#> [1,] 0.04630939
-```
-
-#### Stata (Cox–Shi / CS)
+Just as `maxdefiersshare()` relaxes monotonicity in the lower-bound calculation (example 2), it does the same for the sharp-null test: instead of forbidding defiers entirely, we allow up to a specified share and re-test.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* varlist order is: d m y
 testmechs_test_sharpnull treat grandmother motherfinancial, ///
     method(CS) numybins(5) cluster(uc) maxdefiersshare(0.01)
 ```
 
-#### Expected output (matches R)
+**Expected output** (matches R):
 - `test_stat = 6.144824`
 - `cv        = 5.991465`
 - `p-value   = 0.04630932`
 
-Interpretation:
-- The p-value increases to about **0.046**, so the test still rejects the sharp null even when allowing one percent of the population to be defiers.
-- Allowing for larger shares of defiers will eventually lead to an insignificant result.
-- As in the standard test, the reported p-value corresponds to the smallest value of **α** for which the test rejects.
+**Interpretation.** Allowing 1% defiers moves the p-value from 0.023 to 0.046 — still a rejection at the 5% level. The conclusion (some direct effect remains) is robust to small monotonicity violations. As you increase `maxdefiersshare()`, the test loses power and will eventually fail to reject.
 
 ---
 
 ### 8. Combination of both mechanisms: sharp null test
 
-Next, we test the null hypothesis that the treatment effect is explained by the **combination** of the two mechanisms (presence of grandmother and quality of relationship with husband). In the R package this is done by passing a vector of variable names to the `m` argument. In the Stata port, we simply pass both mediator variables in the varlist.
-
-#### R benchmark (Cox–Shi / CS)
-
-```r
-test_result_both <- test_sharp_null(
-  df = mother_data,
-  d = "treat",
-  m = c("relationship_husb", "grandmother"),
-  y = "motherfinancial",
-  num_Ybins = 5,
-  method = "CS",
-  cluster = "uc"
-)
-test_result_both$pval
-#>           [,1]
-#> [1,] 0.6540863
-```
-
-With a p-value of about **0.654**, R cannot reject the sharp null that the combination of the two mechanisms fully explains the treatment effect.
-
-#### Stata (Cox–Shi / CS)
+The most interesting test is whether the treatment effect can be explained by the **combination** of the two mechanisms — grandmother presence *and* relationship quality — together. In the R package this is done by passing a vector of variable names; in the Stata port, pass both mediators in the varlist.
 
 ```stata
 use "data/mother_data.dta", clear
@@ -406,120 +300,100 @@ testmechs_test_sharpnull treat grandmother relationship_husb motherfinancial, //
     method(CS) numybins(5) cluster(uc)
 ```
 
-#### Expected output (matches R)
+**Expected output** (matches R):
 - `test_stat = 7.741333`
 - `cv        = 18.307038`
 - `p-value   = 0.65408650`
 
-Interpretation:
-- With a p-value of about **0.654**, the test cannot reject the sharp null that the combination of the two mechanisms fully explains the treatment effect.
-- This matches the R benchmark exactly (R: 0.6540863, Stata: 0.65408650).
+**Interpretation.** With p ≈ 0.65, we **cannot reject** the sharp null that the combination of grandmother presence and relationship quality fully explains the treatment effect. Neither mediator alone was sufficient (examples 5 and 6), but jointly they can account for the effect. This is the finding highlighted in Section 5.2 of the paper.
+
+The point-estimate lower bound in example 4 told the same story from a different angle: the residual unexplained fraction is only ~7%, and this test says that residual is not statistically distinguishable from zero.
 
 ---
 
 ## Non-experimental setting
 
-The examples above focus on data from a randomized controlled trial, where treatment `D` is randomly assigned. TestMechs assumes by default that we have an RCT, and treatment effects are estimated by comparing means for the treated and control group. However, TestMechs can also be applied in settings where we have conditional randomization given covariates or an instrumental variable for the treatment. Both `testmechs_test_sharpnull` and `testmechs_lb_fracaffected` accept the `reg_formula("...")` option, which allows the researcher to provide a regression formula (OLS or 2SLS IV) to estimate treatment effects after adjusting linearly for observable characteristics.
+The examples above assume treatment is **randomly assigned** — the default in the package. In that setting, treatment effects are estimated by comparing means for the treated and control groups within `(y, m)` cells. In many applied settings, however, treatment is only **conditionally** randomly assigned given a set of observable characteristics, or is assigned non-randomly but with a valid instrumental variable available. Both entry-points (`testmechs_test_sharpnull` and `testmechs_lb_fracaffected`) support these settings via the `reg_formula()` option.
 
-The formula string uses R-style syntax (with a leading tilde), mirroring the R package's convention:
-- **OLS with controls:** `reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")`
-- **2SLS IV:** `reg_formula("~ age_baseline + edu_mo_baseline + wealth_baseline + (treat = iv)")` — the parenthesised `(endog = instr)` clause specifies the endogenous variable and its instrument.
+### How `reg_formula()` works
 
-While adjusting for covariates is not necessary in our running example (which is an RCT), we can still adjust for covariates to increase precision. Below we illustrate using the baseline covariates `age_baseline`, `edu_mo_baseline`, and `wealth_baseline`. For brevity we focus on `testmechs_test_sharpnull`; the same `reg_formula` argument works with `testmechs_lb_fracaffected`.
+`reg_formula()` takes a **string** describing the right-hand side of a regression that will be run *inside* the package for each `(y, m)` cell. Under the hood, the package builds the cell indicator `(Y = y_val) & (M = m_val)` as the LHS of the regression, and the string you provide gives the RHS.
+
+The string uses **R-style formula syntax** (this is inherited from the R package's convention, which in turn defers to `fixest`):
+
+- **Leading tilde `~`** — required. Marks the string as a formula. You do *not* write anything to the left of `~`; the LHS is generated internally by the command as the cell indicator.
+
+- **`+` separates covariates** — e.g. `"~ treat + age + education"`. Not commas (that's Stata's default) — for compatibility with the R form.
+
+- **`(endog = instrument)` for 2SLS IV** — parenthesised, with `=` inside. For example, `"~ age + education + (treat = eligibility)"` says: run 2SLS with `treat` as the endogenous variable and `eligibility` as its instrument, and `age` and `education` as exogenous controls. The syntax mirrors Stata's own `ivregress` convention.
+
+Two supported forms:
+
+| Form | Example | What it runs internally |
+|---|---|---|
+| **OLS with controls** | `"~ treat + age + educ + wealth"` | `regress lhs treat age educ wealth` in each `(y, m)` cell; grabs `_b[treat]` as the estimate |
+| **2SLS IV** | `"~ age + educ + wealth + (treat = iv)"` | `ivregress 2sls lhs age educ wealth (treat = iv)` in each cell; grabs `_b[treat]` |
+
+**Perfect-instrument fallback.** If the instrument is collinear with the treatment (Stata returns `r(481)`), the command silently falls back to OLS treating the "endogenous" variable as a regular regressor. This matches the behavior of R's `fixest::feols` in the same degenerate case, so an instrument that is a copy of the treatment produces identical results as the OLS-with-controls form.
+
+**Contrast with native Stata syntax.** In a normal `regress` call you would write:
+```stata
+regress motherfinancial treat age_baseline edu_mo_baseline wealth_baseline
+```
+Inside `reg_formula()`, the LHS is not `motherfinancial` — the package rewrites it internally to `(y_bin == y_val & grandmother == m_val)` for each cell. What you provide is only the RHS, and the option takes it as an R-style string:
+```stata
+reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")
+```
+The reason for the string form (rather than a native Stata `regress`-style varlist) is to keep the option's syntax identical across Stata and R, so the same formula string works in both ports.
+
+**Cluster-robust inference under `reg_formula()`** uses analytic per-observation influence functions of the sandwich form:
+- For OLS: `IF_i = M[j,:] * x_i * e_i * n_reg` with `M = (X'X)^{-1}`.
+- For 2SLS: `IF_i = M[j,:] * xhat_i * e_iv,i * n_reg` where `xhat` substitutes first-stage fitted values for the endogenous variable and `M = e(V)/e(rmse)^2`.
+
+These reproduce R's `sandwich::estfun(feols) %*% t(sandwich::bread(feols))` per observation to machine precision on the same data — see `tests/verify/` for the element-wise verification.
 
 ### 9. Sharp null with regression-adjusted probabilities (OLS controls)
 
-The key new argument is `reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")`. This says that we should estimate the effect of the treatment (`treat`) on `Y` and `M` (or functions thereof) by running a regression with the treatment variable and baseline controls on the right-hand side.
-
-#### R benchmark (Cox–Shi / CS with controls)
-
-```r
-test_result_gm_ols <- test_sharp_null(
-  df = mother_data,
-  d = "treat",
-  m = "grandmother",
-  y = "motherfinancial",
-  reg_formula = "~ treat + age_baseline + edu_mo_baseline + wealth_baseline",
-  method = "CS",
-  num_Ybins = 5,
-  cluster = "uc"
-)
-test_result_gm_ols$pval
-#>            [,1]
-#> [1,] 0.03105106
-```
-
-#### Stata (Cox–Shi / CS with controls)
+We use `reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")` to control linearly for three baseline covariates while estimating the partial probabilities cell-by-cell.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* varlist order is: d m y
 testmechs_test_sharpnull treat grandmother motherfinancial, ///
     method(CS) numybins(5) cluster(uc) ///
     reg_formula("~ treat + age_baseline + edu_mo_baseline + wealth_baseline")
 ```
 
-#### Expected output (matches R)
+**Expected output** (matches R):
 - `test_stat = 6.944244`
 - `cv        = 5.991465`
 - `p-value   = 0.03105106`
 
-Interpretation:
-- The p-value is about **0.031**, so the sharp null is rejected at the **5%** significance level after adjusting for baseline covariates.
-- Compared to the unadjusted result in example 5 (p = 0.023), the adjusted p-value is somewhat larger — the covariates absorb some of the variation that made the unadjusted test more powerful here.
-- Inference uses cluster-robust analytic influence functions: `IF_i = M[j,:] · x_i · e_i · n_reg` where `M = (X'X)^{-1}`, mirroring R's `sandwich::estfun · t(bread)` computation.
+**Interpretation.** Adjusting for baseline covariates changes the p-value slightly from 0.023 (unadjusted, example 5) to 0.031. Both reject the sharp null at 5%. In this application the adjustment costs a small amount of power because the covariates absorb some of the treatment-effect variation, but the qualitative conclusion is unchanged: **there is still a direct channel of CBT on financial empowerment not explained by grandmother presence**, even after controlling for age, education, and baseline wealth. In settings where treatment is only conditionally random (i.e. assignment probability depends on observables), the adjusted version is the one that provides valid inference.
 
 ---
 
 ### 10. Sharp null with an instrumental variable (2SLS IV)
 
-We can also use `reg_formula` to estimate treatment effects using instrumental variables. To illustrate, we construct a noisy instrument for `treat` (analogous to the R README example) and then pass IV syntax to `reg_formula`.
-
-The IV portion is written as `(endog = instr)` inside the formula, matching Stata's `ivregress` convention: everything outside the parentheses is a control, and the parenthesised clause specifies the endogenous variable and its instrument.
-
-#### R benchmark (Cox–Shi / CS with IV)
-
-```r
-set.seed(0)
-mother_data$iv <- mother_data$treat + rnorm(n = length(mother_data$treat), sd = 0.1)  # iv = treat + noise
-
-test_result_gm_iv <- test_sharp_null(
-  df = mother_data,
-  d = "treat",
-  m = "grandmother",
-  y = "motherfinancial",
-  reg_formula = "~ age_baseline + edu_mo_baseline + wealth_baseline | treat ~ iv",
-  method = "CS",
-  num_Ybins = 5,
-  cluster = "uc"
-)
-test_result_gm_iv$pval
-#>           [,1]
-#> [1,] 0.0311524
-```
-
-#### Stata (Cox–Shi / CS with IV)
+We can also use `reg_formula()` to plug in a 2SLS IV. To illustrate, we construct a noisy instrument for `treat` and pass IV syntax to `reg_formula()`. The construct `(treat = iv)` inside the formula tells the command to instrument `treat` with `iv`, mirroring `ivregress 2sls`.
 
 ```stata
 use "data/mother_data.dta", clear
 
-* Construct a noisy instrument (analogous to R's set.seed(0) + rnorm(sd=0.1))
+* Construct a noisy instrument
 set seed 0
 gen double iv = treat + rnormal(0, 0.1)
 
-* varlist order is: d m y
 * IV syntax inside reg_formula uses (endog = instr)
 testmechs_test_sharpnull treat grandmother motherfinancial, ///
     method(CS) numybins(5) cluster(uc) ///
     reg_formula("~ age_baseline + edu_mo_baseline + wealth_baseline + (treat = iv)")
 ```
 
-#### Notes on expected output
+**Notes on expected output.**
 
-- **Numerical result depends on random-number generator.** Stata's `rnormal(0, 0.1)` and R's `rnorm(sd = 0.1)` use different random-number streams, so the constructed `iv` variable will differ between the two runs even with the same seed. The Stata p-value will therefore not equal the R benchmark exactly; only the analytical procedure is the same. To get an exact numerical match against R, users would need to construct `iv` in R and export it (e.g. via `write_dta()`) or use a common noise source.
-- The 2SLS IV point estimate is computed via `ivregress 2sls`, and the per-observation influence function is built via the sandwich form `IF_i = M[j,:] · x̂_i · e_iv,i · n_reg` where `M = e(V)/rmse²` is the IV bread, `x̂_i` is the first-stage fitted regressor row, and `e_iv,i` is the IV residual. This exactly reproduces R's `sandwich::estfun(feols) · t(sandwich::bread(feols))` to machine precision on the same data — see `tests/verify/` for the element-wise verification against R.
-- **Perfect-instrument case:** if the instrument is collinear with the endogenous variable (Stata returns `r(481)`), the helper falls back to OLS treating the endog as a regular regressor. This mirrors R's `fixest` behavior in the same degenerate case, so the two produce identical point estimates and IFs when the "instrument" is a copy of the treatment.
+- **Numerical result depends on random-number generator.** Stata's `rnormal(0, 0.1)` and R's `rnorm(sd = 0.1)` use different random-number streams, so the constructed `iv` variable will differ between the two runs even with the same seed. The Stata p-value will therefore not equal the corresponding R p-value exactly; only the analytical procedure is the same. To get an exact numerical match against R, users would need to construct `iv` in R and export it (e.g. via `write_dta()`) or use a common noise source.
+- **Perfect-instrument case.** If the instrument were an exact copy of the treatment (Stata error `r(481)` from `ivregress`), the helper falls back to OLS with the endogenous variable as a regular regressor. This mirrors R's `fixest` behavior in the same degenerate case, so an instrument equal to `treat` produces identical point estimates and IFs as OLS-with-controls.
 
 ---
 
